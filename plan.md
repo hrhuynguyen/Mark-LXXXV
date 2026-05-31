@@ -391,11 +391,12 @@ def get_view_geometry(self):
 
 ### Phase 1 — Procedural build loop (+ Spec Agent)
 
-#### [ ] Step 4 — Strip the client to overlay-only
+#### [x] Step 4 — Strip the client to overlay-only  *(code done + 23 tests green; live launch needs your machine)*
 **Goal:** remove all browser code; client = mic + camera + overlay + Blender bridge.
-**Files:** `client/companion_app.py`, `client/companion_runtime.py`, `client/local_executor.py`.
-**Do:** delete the `BrowserView`/Playwright/CDP paths; keep the sidebar/overlay + audio + cursor sender. Point `local_executor` dispatch at `blender_bridge` instead of browser tools. Add `client/blender_launcher.py` to spawn Blender with the addon and auto-start its server.
-**Verify:** launching the client opens Blender automatically, connects the socket, streams mic audio, and shows the cursor overlay — no browser anywhere.
+**Files:** `client/companion_app.py`, `client/companion_runtime.py`, `client/local_executor.py`, `client/blender_launcher.py` (new), lifted deps `client/{session_ids,ws_guard,trace,companion_state}.py` + `client/actions/tts.py`, `addon/forge_addon.py` (auto-start), `server/server.py` (WS sink), `tests/test_local_executor.py`, `tests/test_blender_launcher.py`.
+**Done:** deleted `BrowserView`/Playwright/CDP everywhere (grep-clean); kept the full **sidebar** (event log + webcam preview + Mute/Reconnect/Calibrate/Debug/Quit) as a right-edge window + the floating cursor overlay. `local_executor` is now a generic relay → `blender_bridge.send_command` on a worker thread. `companion_runtime` lifted ~verbatim (audio I/O, 20 Hz cursor sender, barge-in, reconnect), executor wired to the bridge. `blender_launcher.ensure_blender_running` attaches if the socket is up else spawns Blender with `FORGE_AUTOSTART`/`FORGE_PORT`; the addon `register()` honours those via a deferred timer. `recalibrate` button runs the Step-3 viewport anchoring. A throwaway `/ws/{user}/{session}` **sink** in `server/server.py` counts mic/cursor/trace frames for verification (replaced by Gemini Live in Step 5).
+**Auto-verified (23 tests):** executor forwards/dedups/error-wraps; launcher attach-vs-spawn + missing-binary; client + server import clean; zero browser refs in `client/`.
+**Pending (needs you):** Terminal A `uv run uvicorn server.server:app`; Terminal B `uv run python -m client.companion_app` → Blender opens & connects with no clicks, sidebar shows the live log + webcam preview, the overlay dot tracks your hand, and the server logs a growing `mic=/cursor=` tally. No browser anywhere.
 
 #### [ ] Step 5 — `blender_agent` + remote tool bridge
 **Goal:** the cloud/Local ADK agent executes Blender tools via the client.

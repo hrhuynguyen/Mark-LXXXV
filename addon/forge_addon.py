@@ -27,6 +27,7 @@ Tested on Blender 5.1.2 (bundled Python 3.13). ``bl_info["blender"]`` is the
 import io
 import json
 import math
+import os
 import socket
 import threading
 import time
@@ -394,6 +395,26 @@ class FORGE_OT_StopServer(bpy.types.Operator):
 _CLASSES = (FORGE_PT_Panel, FORGE_OT_StartServer, FORGE_OT_StopServer)
 
 
+def _autostart_from_env():
+    """Start the socket server on launch when FORGE_AUTOSTART is set.
+
+    Used by client/blender_launcher.py so the companion app can bring Blender up
+    fully connected with no manual 'Connect' click. Runs on a deferred timer so
+    Blender is finished booting (bpy data/scenes are ready) before we touch them.
+    """
+    port = int(os.environ.get("FORGE_PORT", DEFAULT_PORT))
+    try:
+        if not getattr(bpy.types, "forge_server", None):
+            bpy.types.forge_server = ForgeServer(port=port)
+        bpy.types.forge_server.start()
+        for scene in bpy.data.scenes:
+            scene.forge_server_running = True
+        print(f"[Forge] auto-started socket server on :{port}")
+    except Exception as exc:  # pragma: no cover - launch-time best effort
+        print(f"[Forge] auto-start failed: {exc}")
+    return None  # one-shot timer
+
+
 def register():
     bpy.types.Scene.forge_port = IntProperty(
         name="Port", default=DEFAULT_PORT, min=1024, max=65535
@@ -401,6 +422,9 @@ def register():
     bpy.types.Scene.forge_server_running = BoolProperty(name="Running", default=False)
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+
+    if os.environ.get("FORGE_AUTOSTART"):
+        bpy.app.timers.register(_autostart_from_env, first_interval=0.5)
 
 
 def unregister():

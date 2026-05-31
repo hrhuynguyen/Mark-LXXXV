@@ -93,6 +93,8 @@ Reused from BlenderMCP (`addon.py` socket server; `BlenderConnection.send_comman
 - **No length framing.** A message is complete when the accumulated bytes parse as one valid JSON object (BlenderMCP behavior). Keep payloads reasonable; large blobs (screenshots) go via temp file (§4) or base64.
 - Default host/port: `BLENDER_HOST=localhost`, `BLENDER_PORT=9876` (env-overridable).
 - The addon executes every command on **Blender's main thread** via `bpy.app.timers.register` — handlers must be main-thread-safe.
+- **Client relays generically (Step 4).** `local_executor` forwards the server's `tool_call` `{tool, args}` straight to `blender_bridge.send_command(tool, args)` and returns the `result` — it does not enumerate tools. The tool *set* is defined server-side (Step 5); the addon validates unknown commands. The synchronous socket call is offloaded to a thread so the client's asyncio loop (audio/cursor) never blocks.
+- **Auto-start (Step 4).** `client/blender_launcher.py` brings Blender up with env `FORGE_AUTOSTART=1` + `FORGE_PORT`; the addon's `register()` then starts the socket server on a deferred `bpy.app.timers` call (no manual "Connect"). If the socket is already up, the launcher attaches instead. The manual Connect/Disconnect panel still works.
 
 ### 3.2 Request
 ```jsonc
