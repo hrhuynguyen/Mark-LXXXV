@@ -36,6 +36,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", help="object name to score pick accuracy against")
     ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument(
+        "--debug",
+        metavar="OBJECT",
+        help="print screen/region/delta against OBJECT's projected center (e.g. --debug Cube)",
+    )
     args = ap.parse_args()
 
     conn = BlenderConnection()
@@ -62,9 +67,28 @@ def main() -> int:
         provider.stop()
         return 1
 
+    # Debug: fetch the projected region center of an object to measure offset.
+    target_center = None
+    if args.debug:
+        code = (
+            "import bpy\n"
+            "from bpy_extras import view3d_utils\n"
+            "for a in bpy.context.window.screen.areas:\n"
+            "    if a.type=='VIEW_3D':\n"
+            "        rg=next(r for r in a.regions if r.type=='WINDOW'); rv=a.spaces.active.region_3d; break\n"
+            f"o=bpy.data.objects.get({args.debug!r})\n"
+            "co=view3d_utils.location_3d_to_region_2d(rg, rv, o.matrix_world.translation)\n"
+            "print(round(co.x,1), round(co.y,1))\n"
+        )
+        out = conn.send_command("execute_code", {"code": code})["result"].split()
+        target_center = (float(out[0]), float(out[1]))
+        print(f"[debug] {args.debug} center projects to region {target_center}")
+        print("[debug] Put the dot on that object's CENTER; read off the delta.\n")
+
     print("\nLive picking — move your hand over the Blender viewport. Ctrl-C to stop.\n")
     last_name = object()
     hits = total = 0
+    last_debug = 0.0
     try:
         while True:
             provider.pump_ui()
@@ -72,6 +96,14 @@ def main() -> int:
             if cursor is None:
                 time.sleep(0.03)
                 continue
+
+            if args.debug and target_center is not None and time.time() - last_debug > 0.4:
+                drx, dry = rect.screen_to_region(cursor.x, cursor.y)
+                print(
+                    f"[debug] screen=({cursor.x},{cursor.y})pt  region=({drx:.0f},{dry:.0f})  "
+                    f"delta=({drx - target_center[0]:+.0f},{dry - target_center[1]:+.0f})"
+                )
+                last_debug = time.time()
             if not rect.contains_screen_point(cursor.x, cursor.y):
                 if last_name is not None:
                     print(f"  cursor @ ({cursor.x},{cursor.y})pt -> outside viewport")
