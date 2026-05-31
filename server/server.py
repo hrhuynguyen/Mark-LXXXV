@@ -25,6 +25,7 @@ from server.live.audio_gate import SessionAudioGate, register_audio_gate, unregi
 from server.live.resettable_queue import ResettableLiveRequestQueue
 from server.live.trace import log_trace_event, make_cursor_ack, parse_trace_payload
 from server.runtime.cursor_payload import parse_cursor_payload
+from server.runtime.part_registry import clear_part_registry
 from server.runtime.realtime_pointer import clear_cursor, set_cursor
 from server.runtime.session_bridge import (
     emit_server_trace,
@@ -380,6 +381,7 @@ async def ws(websocket: WebSocket, user_id: str, session_id: str) -> None:
         queue.close()
         unregister_audio_gate(user_id=user_id, session_id=session_id)
         await clear_cursor(user_id=user_id, session_id=session_id)
+        clear_part_registry(user_id=user_id, session_id=session_id)
         await unregister_bridge(user_id=user_id, session_id=session_id, bridge=bridge)
         try:
             await session_service.delete_session(

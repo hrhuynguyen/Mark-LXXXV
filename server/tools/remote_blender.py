@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from google.adk.tools.tool_context import ToolContext
 
+from server.runtime.part_registry import get_part_registry
 from server.runtime.session_bridge import call_local_tool, emit_server_trace
 
 
@@ -85,7 +86,17 @@ async def execute_blender_code(tool_context: ToolContext, code: str) -> dict:
 
 async def pick_object_at(tool_context: ToolContext) -> dict:
     """Pick the object under the user's current calibrated cursor."""
-    return await _call(tool_context, "pick_object_at", {})
+    user_id, session_id = _get_uid_sid(tool_context)
+    result = await _call(tool_context, "pick_object_at", {})
+    registry = get_part_registry(user_id=user_id, session_id=session_id)
+    if registry is None:
+        return result
+    name = result.get("name")
+    if result.get("hit") and isinstance(name, str) and registry.get(name) is not None:
+        bbox = result.get("world_bounding_box")
+        if bbox is not None:
+            registry.update_bbox(name, bbox)
+    return registry.enrich_pick_result(result)
 
 
 async def get_object_info(tool_context: ToolContext, name: str) -> dict:

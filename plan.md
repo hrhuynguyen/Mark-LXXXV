@@ -406,7 +406,7 @@ def get_view_geometry(self):
 **Do:** rename `browser_agent` → `blender_agent`; replace its tools with `execute_blender_code`, `pick_object_at`, `get_object_info`, `get_viewport_screenshot`, `frame_object`. Each is a thin RPC stub (reuse Wand's `_call`) that the client maps to a `blender_bridge.send_command`. Update the concierge instruction to delegate modeling/pointing to `blender_agent`.
 **Verify:** ⏳ live mic/camera/Gemini/Blender GUI smoke remains manual: say "add a cube" → it appears; "what's at my finger?" → screenshot + `pick_object_at` returns the right name and the agent describes it.
 
-#### [ ] Step 6 — Part Registry
+#### [x] Step 6 — Part Registry ✅ DONE
 **Goal:** every created object is a tracked, JSON-serializable part.
 **Files:** `server/runtime/part_registry.py`.
 **Do:** implement `PartEntry` (§4) + a per-session `PartRegistry` (add/get/update/children/to_json/from_json). **Store names + params only — never live `bpy` refs.** `build_*` tools register entries; `pick_object_at` results are looked up here.
@@ -420,7 +420,11 @@ class PartRegistry:
     def add(self, e): self.parts[e.name] = e
     def to_json(self): return {n: asdict(e) for n, e in self.parts.items()}
 ```
-**Verify:** after a build, `registry.to_json()` round-trips through `json.dumps`/`loads` with no errors and matches the scene's object names.
+**Done:** implemented immutable `PartEntry`, mutable per-build `PartRegistry`, JSON validation, add/get/update/children/from_json/to_json helpers, Build-Spec registration hooks, session-scoped registry storage, scene-name reporting, and `pick_object_at` registry enrichment. Session cleanup now clears the registry.
+
+**Auto-verified (32 tests):** registry JSON round-trip through `json.dumps`/`loads`, child lookup, scene-name report, session isolation, non-JSON param rejection, `pick_object_at` enrichment, full pytest suite, and `ruff check` all pass.
+
+**Verify:** Step 7 build executor should call `register_tool_result(...)` after each generated object; then `registry.scene_name_report(...)` should show no registered objects missing from Blender.
 
 #### [ ] Step 7 — Spec Agent + Build-Spec executor
 **Goal:** terse prompt → detailed, decomposed assembly.
