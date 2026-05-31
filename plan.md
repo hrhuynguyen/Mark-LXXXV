@@ -288,6 +288,8 @@ Wand's tracker uses only landmark 8 (index tip). Extend it to the full 21-landma
 
 Each step has a **Goal · Files · Do · Verify**. Steps are ordered so every one is runnable/testable before the next. Don't advance past a step whose **Verify** fails.
 
+> **Progress legend:** `[x]` done · `[ ]` todo. This §11 checklist is the single source of truth for build progress.
+
 ### Proposed repo layout (monorepo merging both forks)
 ```
 forge/
@@ -321,22 +323,32 @@ forge/
 
 ---
 
-### Step 0 — Environment & skeleton
+### [x] Step 0a — Repo scaffold & design docs ✅ DONE
+- [x] Git repo + monorepo folder layout (`addon/ server/ client/ scripts/`)
+- [x] Package `__init__` markers + module stubs (each keyed to its plan step)
+- [x] `README.md`, `.gitignore`, `pyproject.toml`, `.env.example`
+- [x] `addon/forge_addon.py` header stub + `scripts/spike_cube.py`
+- [x] Design docs: `reference.md`, `blender-mcp.md`, `plan.md`
+- [x] `CONTRACTS.md` (socket + tool schemas) — frozen at `PROTOCOL_VERSION 0.1.0`
+
+### [~] Step 0b — Install & configure  *(env done; addon-enable deferred to Step 2)*
 **Goal:** both halves run and can talk to Google.
-**Do:**
-1. `git init forge`; copy BlenderMCP `addon.py` → `addon/forge_addon.py`; copy Wand `app/` → `server/` and `client/` → `client/`.
-2. `uv venv && source .venv/bin/activate`; install server deps (`google-adk`, `google-genai`, `fastapi`, `uvicorn`, `websockets`) and client deps (`mediapipe`, `opencv-python`, `numpy`, `sounddevice`, `pyobjc`, `websockets`).
-3. Set `GOOGLE_API_KEY` in `.env` (Gemini Live).
-4. Install Blender 3.0+; install `forge_addon.py` via *Edit > Preferences > Add-ons > Install*; enable it.
-**Verify:** `uvicorn server.server:app --port 8000` starts; Blender shows the addon panel in the N-sidebar; `GOOGLE_API_KEY` loads.
+- [x] Vendor real upstream source → `_upstream/{blender-mcp,wand}` (git-ignored reference; lifted into the stubs **per step** rather than wholesale-copied, since our layout renames browser→blender). Copied MediaPipe `hand_landmarker.task` → `client/models/`.
+- [x] `uv venv && source .venv/bin/activate`; `uv pip install -e ".[dev]"` — all deps import (incl. `pyobjc`, `mediapipe`, `cv2`, `sounddevice`; dev `ruff`/`pytest`).
+- [x] `GOOGLE_API_KEY` present in `.env` and loads via `dotenv`; `.env` is git-ignored + untracked.
+- [x] Blender **5.1.2** (bundled Python 3.13) installed at `/Applications/Blender.app`; verified headless — `bpy` runs and `primitive_cube_add` works. ⚠️ 5.x is newer than BlenderMCP's addon target — bump `bl_info["blender"]` and sanity-check `scene.ray_cast` / `view3d_utils` signatures when lifting in Step 2.
+- [ ] Enable the addon (*Preferences > Add-ons > Install* → `addon/forge_addon.py`) — **now unblocked** (Step 2 built the real addon; registration verified on 5.1.2). This is the one remaining manual GUI action: install + enable, open the **Forge** N-sidebar tab, click **Connect**, then `python scripts/spike_cube.py` should pop a cube in the live window.
+- [x] Added a minimal `server.server:app` `/health` placeholder so the server boots now (replaced by real wiring in Step 5).
+**Verify:** ✅ `uvicorn server.server:app` starts (HTTP 200 on `/health`); ✅ `GOOGLE_API_KEY` loads; ⏳ Blender addon panel — pending Step 2.
 
 ---
 
 ### Phase 0 — De-risking spikes
 
-#### Step 1 — Client → Blender socket round-trip (Spike S1)
+#### [x] Step 1 — Client → Blender socket round-trip (Spike S1) ✅ DONE
 **Goal:** the client can drive the live Blender scene.
-**Files:** `client/blender_bridge.py` (new), throwaway `scripts/spike_cube.py`.
+**Files:** `client/blender_bridge.py` (done), `tests/test_blender_bridge.py` (mock-server unit tests), `scripts/{spike_cube.py, run_spike_headless.py, _spike_blender_server.py}`.
+**Done:** lifted `BlenderConnection` into `client/blender_bridge.py` (typed `BlenderError`, context manager, env-driven host/port, 180 s timeout, no-framing receive-until-valid-JSON per CONTRACTS §3). Verified two ways: (a) `pytest` against a mock server incl. a fragmented reply (4 passed); (b) **real-`bpy` round-trip** via `run_spike_headless.py` → launches headless Blender 5.1.2, the bridge sends `execute_code`, a cube is created (`added: 1`), returns `{"executed": true, ...}`. The in-GUI cube (`scripts/spike_cube.py` + "Connect" panel) lands with the persistent addon in Step 2.
 **Do:** lift BlenderMCP's `BlenderConnection.send_command` / `receive_full_response` into `blender_bridge.py`. Click "Connect" in Blender's panel (starts the socket server on 9876). Run a script that sends one command:
 ```python
 # scripts/spike_cube.py
@@ -346,10 +358,11 @@ print(c.send_command("execute_code", {"code": "import bpy; bpy.ops.mesh.primitiv
 ```
 **Verify:** a cube appears in the running Blender window; the call returns `{"executed": true, ...}`.
 
-#### Step 2 — `pick_object_at` raycast (Spike S2)
+#### [x] Step 2 — `pick_object_at` raycast (Spike S2) ✅ DONE
 **Goal:** map a 2D viewport pixel to the 3D object under it.
-**Files:** `addon/forge_addon.py` (add handlers + register in the `handlers` dict).
-**Do:** add `_get_view3d()` (find the `VIEW_3D` area/region/`RegionView3D`), `get_view_geometry()` (return region rect + size), and `pick_object_at()` (the §3c snippet). Register both command names.
+**Files:** `addon/forge_addon.py` (full addon), `scripts/_check_addon.py`, `tests/test_addon_headless.py`.
+**Done:** built the real `forge_addon.py` — lifted BlenderMCP's socket server + `bpy.app.timers` main-thread dispatch, stripped all generation/telemetry, renamed UI to the **Forge** panel (`Connect`/`Disconnect`). Handlers: `execute_code`, `get_scene_info`, `get_object_info`, `_get_view3d`, `get_view_geometry`, `pick_object_at` (raycast). Verified on **Blender 5.1.2** headlessly (`pytest tests/test_addon_headless.py`, 15/15 checks): register/unregister clean, **pick at viewport center hits `Cube`** with `world_bounding_box [[-1,-1,-1],[1,1,1]]`, empty pixel → `{"hit": false}`. The `ray_cast(depsgraph,…)` + `view3d_utils` 5.x signatures all work. *Not yet verified:* the GUI socket+timer round-trip (`bpy.app.timers` only fire under the GUI event loop) — that's the manual `spike_cube.py` path below, which also satisfies the 0b "addon panel" item.
+**Do (original):** add `_get_view3d()` (find the `VIEW_3D` area/region/`RegionView3D`), `get_view_geometry()` (return region rect + size), and `pick_object_at()` (the §3c snippet). Register both command names.
 ```python
 def _get_view3d(self):
     for area in bpy.context.screen.areas:
@@ -365,11 +378,12 @@ def get_view_geometry(self):
 ```
 **Verify:** from a spike script, call `pick_object_at` with a region pixel known to be over the cube → returns the cube's `name` + `world_bounding_box`; an empty pixel → `{"hit": false}`.
 
-#### Step 3 — Direct fingertip → region calibration (Spike S3)
+#### [~] Step 3 — Direct fingertip → region calibration (Spike S3)  *(code done + math verified; ≥90% gate needs your webcam)*
 **Goal:** pointing maps to the right region pixel without knowing Blender's OS window position.
-**Files:** `client/cursor/provider.py` (adapt `run_guided_calibration`), `client/cursor/mapper.py` (reused homography).
-**Do:** drive the 4 calibration targets to Blender's VIEW_3D region corners (from `get_view_geometry`), capture fingertip medians, fit the homography → `fingertip → region px`. Feed that into `pick_object_at`.
-**Verify:** after calibration, pointing at the cube selects it **≥90%** of attempts; the `ScreenDotOverlay` dot visually sits on the fingertip.
+**Files:** `client/cursor/{types,displays,webcam_tracker}.py` (lifted from Wand), `client/cursor/mapper.py` (`RegionMapper` + `region_corner_targets`), `client/cursor/provider.py` (`RegionCalibrator`), `scripts/spike_pick.py`, `tests/test_region_mapper.py`, `tests/test_region_calibration.py`.
+**Done:** built the fingertip→**region px** homography (same `cv2.getPerspectiveTransform` technique as Wand, but fit straight to Blender region pixels in **bottom-left origin** — so no OS window position needed; the camera y-down→region y-up flip is absorbed by the correspondences). Calibration is guided by **fingertip-stability dwell** (no on-screen target ring, since we don't know the window position): the user points at each visible viewport corner and holds still. **Auto-verified (13 tests):** homography reproduces interior points (±0.5 px), y-flip + clamping correct, and the full 4-corner calibration orchestration runs end-to-end with a fake tracker and reproduces each corner (±1 px). Tracker + model (`client/models/hand_landmarker.task`) load.
+**Pending (needs you, not self-verifiable):** run `python scripts/spike_pick.py --target Cube` with Blender open + addon Connected + webcam → confirm pointing selects the right object **≥90%**. The screen-space overlay dot is deferred (Forge maps to region, not screen; the cursor overlay is a Step 8 item).
+**Original do:** drive the 4 calibration targets to Blender's VIEW_3D region corners (from `get_view_geometry`), capture fingertip medians, fit the homography → `fingertip → region px`. Feed that into `pick_object_at`.
 
 > **Gate:** Steps 1–3 prove the riskiest seam. Do not build features until S3's 90% holds.
 
@@ -377,19 +391,19 @@ def get_view_geometry(self):
 
 ### Phase 1 — Procedural build loop (+ Spec Agent)
 
-#### Step 4 — Strip the client to overlay-only
+#### [ ] Step 4 — Strip the client to overlay-only
 **Goal:** remove all browser code; client = mic + camera + overlay + Blender bridge.
 **Files:** `client/companion_app.py`, `client/companion_runtime.py`, `client/local_executor.py`.
 **Do:** delete the `BrowserView`/Playwright/CDP paths; keep the sidebar/overlay + audio + cursor sender. Point `local_executor` dispatch at `blender_bridge` instead of browser tools. Add `client/blender_launcher.py` to spawn Blender with the addon and auto-start its server.
 **Verify:** launching the client opens Blender automatically, connects the socket, streams mic audio, and shows the cursor overlay — no browser anywhere.
 
-#### Step 5 — `blender_agent` + remote tool bridge
+#### [ ] Step 5 — `blender_agent` + remote tool bridge
 **Goal:** the cloud/Local ADK agent executes Blender tools via the client.
 **Files:** `server/agents/blender_agent.py`, `server/tools/remote_blender.py`, `server/agents/concierge.py`, `client/local_executor.py`.
 **Do:** rename `browser_agent` → `blender_agent`; replace its tools with `execute_blender_code`, `pick_object_at`, `get_object_info`, `get_viewport_screenshot`, `frame_object`. Each is a thin RPC stub (reuse Wand's `_call`) that the client maps to a `blender_bridge.send_command`. Update the concierge instruction to delegate modeling/pointing to `blender_agent`.
 **Verify:** say "add a cube" → it appears; "what's at my finger?" → screenshot + `pick_object_at` returns the right name and the agent describes it.
 
-#### Step 6 — Part Registry
+#### [ ] Step 6 — Part Registry
 **Goal:** every created object is a tracked, JSON-serializable part.
 **Files:** `server/runtime/part_registry.py`.
 **Do:** implement `PartEntry` (§4) + a per-session `PartRegistry` (add/get/update/children/to_json/from_json). **Store names + params only — never live `bpy` refs.** `build_*` tools register entries; `pick_object_at` results are looked up here.
@@ -405,7 +419,7 @@ class PartRegistry:
 ```
 **Verify:** after a build, `registry.to_json()` round-trips through `json.dumps`/`loads` with no errors and matches the scene's object names.
 
-#### Step 7 — Spec Agent + Build-Spec executor
+#### [ ] Step 7 — Spec Agent + Build-Spec executor
 **Goal:** terse prompt → detailed, decomposed assembly.
 **Files:** `server/agents/spec_agent.py` (new), `server/agents/blender_agent.py` (executor + generator library).
 **Do:**
@@ -418,13 +432,13 @@ class PartRegistry:
 
 ### Phase 2 — Point-and-edit
 
-#### Step 8 — Contextual info on point
+#### [ ] Step 8 — Contextual info on point
 **Goal:** point at a part → the agent tells you what it is.
 **Files:** `server/agents/blender_agent.py`, `client/cursor/ui_overlay.py` (optional label).
 **Do:** wire "what's this?" → resolve cursor (client-side, like Wand "here") → `pick_object_at` → registry lookup + `get_object_info` → spoken answer; optionally render a cursor-anchored text label.
 **Verify:** point at a leg + "what is this?" → "Landing leg 2, ~8 m, part of stage-1."
 
-#### Step 9 — Registry-driven edits
+#### [ ] Step 9 — Registry-driven edits
 **Goal:** edits hit only the targeted part.
 **Files:** `server/tools/remote_blender.py` (`transform_part`, `regenerate_part`), `addon/forge_addon.py` (`set_part_transform`).
 **Do:** *transform* → delta on the live object by name + update registry `params`; *structural* → re-run that part's generator with new params, leave siblings untouched.
@@ -434,19 +448,19 @@ class PartRegistry:
 
 ### Phase 3 — Gesture navigation
 
-#### Step 10 — Gesture recognizer (21 landmarks)
+#### [ ] Step 10 — Gesture recognizer (21 landmarks)
 **Goal:** detect point / pinch / open-palm / fist / two-hand, mode-gated.
 **Files:** `client/cursor/webcam_tracker.py` (emit full landmarks + handedness), `client/gestures/recognizer.py` (new).
 **Do:** compute pinch via thumb(4)–index(8) distance, palm via finger-extension, two-hand spread via inter-hand distance; debounce; emit discrete events + continuous deltas; enter "nav mode" only on a held gesture so pointing ≠ navigating.
 **Verify:** the recognizer logs stable, debounced gesture states with <100 ms latency; pointing never triggers nav.
 
-#### Step 11 — Orbit / zoom / pan tools
+#### [ ] Step 11 — Orbit / zoom / pan tools
 **Goal:** hands-only camera control.
 **Files:** `addon/forge_addon.py` (`orbit_view`, `zoom_view`, `pan_view`), `client/companion_runtime.py` (send nav deltas).
 **Do:** mutate `RegionView3D` directly: `orbit_view`→`view_rotation`, `zoom_view`→`view_distance`, `pan_view`→`view_location`. Stream deltas at gesture rate.
 **Verify:** pinch-drag orbits, two-hand spread zooms, palm-drag pans — responsive (<150 ms), smooth, no mesh changes.
 
-#### Step 12 — Local persistence
+#### [ ] Step 12 — Local persistence
 **Goal:** save/reopen a build locally.
 **Files:** `server/runtime/part_registry.py`, `addon/forge_addon.py` (save/load handlers).
 **Do:** "save this build" → `bpy.ops.wm.save_as_mainfile` + write `registry.to_json()` beside it; "reopen X" → load both, rehydrate registry.
@@ -456,7 +470,7 @@ class PartRegistry:
 
 ### Phase 4 — Generation & library fallback
 
-#### Step 13 — Wire generation/asset tools
+#### [ ] Step 13 — Wire generation/asset tools
 **Goal:** complex single props + environment.
 **Files:** `server/agents/blender_agent.py` (add BlenderMCP's `generate_hyper3d_*`, `search/download_sketchfab_*`, Poly Haven HDRI tools), strategy prompt.
 **Do:** keep these as **fallbacks** (registered as `kind:"generated"|"library_asset"`, single non-decomposed parts); auto-place via AABB into the assembly; HDRI → world lighting.
@@ -466,14 +480,14 @@ class PartRegistry:
 
 ### Phase 5 — Cloud & polish (later / optional)
 
-#### Step 14 — Firebase persistence
+#### [ ] Step 14 — Firebase persistence
 **Files:** `server/runtime/part_registry.py` (Firestore sync), storage client.
 **Do:** Firestore for registry/metadata/history (keyed by `user_id`/`build_id`), Firebase Storage for `.blend`/glTF blobs, Firebase Auth for identity. Because the registry is already JSON-serializable (Step 6), this is an upload/download swap of the local save path.
 **Verify:** save on machine A, reopen on machine B.
 
-#### Step 15 — Streaming / hardening (only if going remote)
+#### [ ] Step 15 — Streaming / hardening (only if going remote)
 GPU-offscreen viewport stream (WebSocket/WebRTC); length-prefixed socket framing; multi-user; undo-to-parameters.
 
 ---
 
-**Start here:** Step 0 → Step 1. The S1 cube round-trip is the foundation everything else rests on.
+**Next up:** Step 0b (install / configure) → Step 1. The S1 cube round-trip is the foundation everything else rests on. (`CONTRACTS.md` is frozen, so A and B can start in parallel.)
