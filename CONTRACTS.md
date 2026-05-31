@@ -114,8 +114,9 @@ Reused from BlenderMCP (`addon.py` socket server; `BlenderConnection.send_comman
 
 | Command | params | result | Step |
 |---|---|---|---|
-| `get_view_geometry` | `{}` | `{"region": {"x","y","width","height"}}` | 2 |
-| `pick_object_at` | `{"region_x": int, "region_y": int}` | `{"hit": bool, "name"?, "type"?, "hit_location"?: [x,y,z], "world_bounding_box"?: [[minx,miny,minz],[maxx,maxy,maxz]]}` | 2 |
+| `get_view_geometry` | `{}` | `{"region": {"x","y","width","height"}, "is_perspective", "view_distance"}` | 2 |
+| `get_window_geometry` | `{}` | `{"window": {"x","y","width","height"} (pts), "region": {"x","y","width","height"} (px), "pixel_size"}` | 3 |
+| `pick_object_at` | `{"region_x": int, "region_y": int}` | `{"hit": bool, "name"?, "type"?, "hit_location"?: [x,y,z], "hit_normal"?, "world_bounding_box"?: [[minx,miny,minz],[maxx,maxy,maxz]]}` | 2 |
 | `set_part_transform` | `{"name": str, "delta": Delta}` | `{"name","location":[x,y,z],"rotation":[x,y,z],"scale":[x,y,z],"world_bounding_box"}` | 9 |
 | `orbit_view` | `{"d_azimuth": float, "d_elevation": float}` (radians) | `{"ok": true}` | 11 |
 | `zoom_view` | `{"factor": float}` (>1 = closer) | `{"ok": true}` | 11 |

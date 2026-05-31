@@ -1,120 +1,263 @@
 """client.cursor.provider
 
-Forge region calibration (Step 3). Adapts Wand's guided 4-point calibration to
-the Blender viewport.
+Hand cursor provider + guided 4-point calibration (lifted from Wand).
 
-The key difference from Wand: there is no pre-mapped on-screen cursor to move
-into a target ring (we deliberately don't know where the Blender window sits), so
-we can't draw a ring at a region corner. Instead we guide the user by prompt
-("point at the TOP-LEFT corner of the Blender viewport and hold still") and
-detect capture via **fingertip stability** — when the normalized fingertip stops
-moving for a short dwell, we take its median and pair it with that region corner.
-
-After four corners, the RegionMapper holds a fingertip→region homography that
-feeds straight into the addon's ``pick_object_at``.
+The hand drives a visible on-screen dot (ScreenDotOverlay); calibration shows a
+ring (ScreenTargetOverlay) at each screen corner and the user moves the dot into
+it and holds briefly. This is the easy "hand acts as a mouse" UX. Forge then
+converts the screen cursor to Blender region pixels for picking
+(client/cursor/viewport.py).
 """
 
 from __future__ import annotations
 
+import math
 import statistics
 import time
-from collections import deque
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
-from .mapper import RegionMapper, region_corner_targets
+from .mapper import CursorMapper
+from .types import CursorSample
+from .ui_overlay import ScreenDotOverlay, ScreenTargetOverlay
 from .webcam_tracker import WebcamFingerTracker
 
-_PRETTY = {
-    "top_left": "TOP-LEFT",
-    "top_right": "TOP-RIGHT",
-    "bottom_right": "BOTTOM-RIGHT",
-    "bottom_left": "BOTTOM-LEFT",
-}
+
+class CursorProvider(Protocol):
+    def start(self) -> bool: ...
+    def stop(self) -> None: ...
+    def get_cursor(self) -> Optional[CursorSample]: ...
+    def pump_ui(self) -> None: ...
+    def status(self) -> Dict[str, Any]: ...
 
 
-class RegionCalibrator:
-    """Drives a fingertip-stability 4-corner calibration against the Blender region."""
+class MouseCursorProvider:
+    def __init__(self) -> None:
+        try:
+            from pynput.mouse import Controller
+        except Exception as exc:
+            raise RuntimeError(f"pynput is required for MouseCursorProvider: {exc}")
+        self._mouse = Controller()
 
-    def __init__(self, tracker: WebcamFingerTracker, mapper: RegionMapper) -> None:
-        self.tracker = tracker
-        self.mapper = mapper
+    def start(self) -> bool:
+        return True
 
-    def current_region_point(self) -> Optional[Tuple[float, float]]:
-        """Latest fingertip mapped to region px, or None if no hand is visible."""
-        sample = self.tracker.get_latest_sample()
-        if sample is None:
+    def stop(self) -> None:
+        return None
+
+    def get_cursor(self) -> Optional[CursorSample]:
+        x, y = self._mouse.position
+        return CursorSample(x=int(x), y=int(y), ts=time.time(), source="mouse", confidence=1.0)
+
+    def pump_ui(self) -> None:
+        return None
+
+    def status(self) -> Dict[str, Any]:
+        return {"source": "mouse", "running": True, "last_error": None}
+
+
+class HandCursorProvider:
+    def __init__(
+        self,
+        *,
+        camera_index: int = 0,
+        smoothing: float = 0.35,
+        stale_timeout_s: float = 0.4,
+        tracker_start_timeout_s: float = 8.0,
+        mirror: bool = True,
+        preview: bool = True,
+        preview_window: bool = True,
+        overlay: bool = True,
+        overlay_radius: int = 10,
+        calibration_target_radius: int = 48,
+        tracker: Optional[WebcamFingerTracker] = None,
+        mapper: Optional[CursorMapper] = None,
+        overlay_ui: Optional[ScreenDotOverlay] = None,
+        calibration_overlay_ui: Optional[ScreenTargetOverlay] = None,
+    ) -> None:
+        self.tracker = tracker or WebcamFingerTracker(
+            camera_index=camera_index,
+            mirror=mirror,
+            preview_enabled=preview,
+            preview_window_enabled=preview_window,
+        )
+        self.mapper = mapper or CursorMapper(smoothing=smoothing, stale_timeout_s=stale_timeout_s)
+
+        self.overlay = overlay_ui
+        if self.overlay is None and overlay:
+            self.overlay = ScreenDotOverlay(radius=overlay_radius, visible=True)
+        self.calibration_overlay = calibration_overlay_ui or ScreenTargetOverlay(
+            radius=calibration_target_radius, visible=False
+        )
+
+        self.tracker_start_timeout_s = float(max(0.5, tracker_start_timeout_s))
+        self._running = False
+        self._last_error: Optional[str] = None
+
+    def start(self) -> bool:
+        if self.overlay is not None:
+            if not self.overlay.start():
+                self._last_error = self.overlay.get_last_error() or "overlay failed to start"
+                return False
+
+        if self.calibration_overlay is not None:
+            if not self.calibration_overlay.start():
+                self._last_error = (
+                    self.calibration_overlay.get_last_error() or "calibration overlay failed to start"
+                )
+                if self.overlay is not None:
+                    self.overlay.stop()
+                return False
+
+        if not self.tracker.start(timeout_s=self.tracker_start_timeout_s):
+            health = self.tracker.get_health()
+            self._last_error = self.tracker.get_last_error() or (
+                f"tracker failed to start (running={health.running}, frames_seen={health.frames_seen})"
+            )
+            if self.overlay is not None:
+                self.overlay.stop()
+            if self.calibration_overlay is not None:
+                self.calibration_overlay.stop()
+            self._running = False
+            return False
+
+        self._running = True
+        self._last_error = None
+        return True
+
+    def stop(self) -> None:
+        self.tracker.stop()
+        if self.overlay is not None:
+            self.overlay.stop()
+        if self.calibration_overlay is not None:
+            self.calibration_overlay.stop()
+        self._running = False
+
+    def get_cursor(self) -> Optional[CursorSample]:
+        return self._map_sample_to_cursor(self.tracker.get_latest_sample())
+
+    def _map_sample_to_cursor(self, sample) -> Optional[CursorSample]:
+        if sample is not None:
+            cur = self.mapper.update_from_normalized(
+                sample.x, sample.y, ts=sample.ts, source="hand", confidence=sample.confidence
+            )
+        else:
+            cur = self.mapper.get_fallback()
+
+        if self.overlay is not None:
+            if cur is not None:
+                self.overlay.update_position(cur.x, cur.y)
+            else:
+                self.overlay.pump()
+        return cur
+
+    def pump_ui(self) -> None:
+        self.tracker.pump_preview()
+        if self.overlay is not None:
+            self.overlay.pump()
+        if self.calibration_overlay is not None:
+            self.calibration_overlay.pump()
+
+    def set_overlay_visible(self, visible: bool) -> Optional[bool]:
+        if self.overlay is None:
             return None
-        return self.mapper.map_to_region(sample.x, sample.y)
+        self.overlay.set_visible(bool(visible))
+        return bool(visible)
 
-    def run_calibration(
+    def clear_calibration(self) -> Tuple[bool, str]:
+        self.mapper.clear_calibration()
+        return True, "calibration cleared"
+
+    def run_guided_calibration(
         self,
         *,
         announce: Optional[Callable[[str], None]] = None,
-        margin_ratio: float = 0.08,
-        dwell_s: float = 0.6,
-        stability_eps: float = 0.02,
-        min_samples: int = 6,
-        target_timeout_s: float = 25.0,
+        dwell_s: float = 0.30,
+        target_timeout_s: float = 20.0,
         poll_dt_s: float = 0.02,
-        pump_ui: Optional[Callable[[], None]] = None,
     ) -> Tuple[bool, str]:
-        """Capture the 4 viewport corners and fit the homography.
-
-        ``stability_eps`` is the max normalized spread (in x and y) over the dwell
-        window for the fingertip to count as "held still".
-        """
+        """Interactive 4-point calibration: move the dot into each ring and hold."""
         say = announce or print
-        pump = pump_ui or self.tracker.pump_preview
-        targets = region_corner_targets(self.mapper.width, self.mapper.height, margin_ratio)
+        targets = self.mapper.get_calibration_targets()
+        dwell_s = max(0.2, float(dwell_s))
+        target_timeout_s = max(3.0, float(target_timeout_s))
+        poll_dt_s = max(0.01, float(poll_dt_s))
 
-        fingertip_pts: List[Tuple[float, float]] = []
-        region_pts: List[Tuple[float, float]] = []
+        camera_points: List[Tuple[float, float]] = []
+        screen_points: List[Tuple[int, int]] = []
         missing_notice_deadline = 0.0
 
-        say("[calibration] 4-corner calibration. Point at each corner of the Blender")
-        say("[calibration] 3D viewport (as you see it on screen) and hold your finger still.")
+        say("[calibration] Starting 4-point calibration.")
+        say("[calibration] Move the small yellow cursor into each large ring and hold briefly.")
 
-        for idx, (name, rx, ry) in enumerate(targets, start=1):
-            say(f"[calibration] {idx}/4 — point at the {_PRETTY[name]} corner and hold still.")
-            window: deque = deque()  # (ts, x_norm, y_norm)
-            deadline = time.time() + target_timeout_s
-            captured = False
+        try:
+            for idx, (name, sx, sy) in enumerate(targets, start=1):
+                pretty_name = name.replace("_", "-")
+                if self.calibration_overlay is not None:
+                    self.calibration_overlay.set_visible(True)
+                    self.calibration_overlay.update_position(sx, sy)
 
-            while time.time() < deadline:
-                pump()
-                sample = self.tracker.get_latest_sample()
-                now = time.time()
+                say(f"[calibration] {idx}/4 point to {pretty_name}.")
 
-                if sample is None:
-                    window.clear()
-                    if now >= missing_notice_deadline:
-                        say("[calibration] hand not detected — keep one hand visible.")
-                        missing_notice_deadline = now + 1.5
+                inside_since: Optional[float] = None
+                stable_camera_samples: List[Tuple[float, float]] = []
+                step_deadline = time.time() + target_timeout_s
+
+                while time.time() < step_deadline:
+                    self.pump_ui()
+                    sample = self.tracker.get_latest_sample()
+                    cursor = self._map_sample_to_cursor(sample)
+                    now = time.time()
+
+                    if sample is None or cursor is None:
+                        inside_since = None
+                        stable_camera_samples.clear()
+                        if now >= missing_notice_deadline:
+                            say("[calibration] hand not detected. Keep one hand visible.")
+                            missing_notice_deadline = now + 1.5
+                        time.sleep(poll_dt_s)
+                        continue
+
+                    distance = math.hypot(float(cursor.x - sx), float(cursor.y - sy))
+                    target_radius = float(getattr(self.calibration_overlay, "radius", 48))
+                    if distance <= target_radius:
+                        if inside_since is None:
+                            inside_since = now
+                            stable_camera_samples = []
+                        stable_camera_samples.append((float(sample.x), float(sample.y)))
+
+                        if now - inside_since >= dwell_s and len(stable_camera_samples) >= 3:
+                            x_med = statistics.median(p[0] for p in stable_camera_samples)
+                            y_med = statistics.median(p[1] for p in stable_camera_samples)
+                            camera_points.append((x_med, y_med))
+                            screen_points.append((sx, sy))
+                            say(f"[calibration] captured {pretty_name}.")
+                            break
+                    else:
+                        inside_since = None
+                        stable_camera_samples.clear()
+
                     time.sleep(poll_dt_s)
-                    continue
+                else:
+                    return False, (
+                        f"calibration failed at {pretty_name}: move the cursor into the ring and hold."
+                    )
+        finally:
+            if self.calibration_overlay is not None:
+                self.calibration_overlay.set_visible(False)
+                self.calibration_overlay.pump()
 
-                window.append((sample.ts, float(sample.x), float(sample.y)))
-                while window and now - window[0][0] > dwell_s:
-                    window.popleft()
+        ok, msg = self.mapper.calibrate_from_correspondences(camera_points, screen_points)
+        if not ok:
+            return False, msg
 
-                if len(window) >= min_samples and (now - window[0][0]) >= dwell_s * 0.8:
-                    xs = [p[1] for p in window]
-                    ys = [p[2] for p in window]
-                    if (max(xs) - min(xs)) <= stability_eps and (max(ys) - min(ys)) <= stability_eps:
-                        fingertip_pts.append((statistics.median(xs), statistics.median(ys)))
-                        region_pts.append((rx, ry))
-                        say(f"[calibration] captured {_PRETTY[name]}.")
-                        captured = True
-                        break
+        say("[calibration] Completed. Calibration is active for this session.")
+        return True, msg
 
-                time.sleep(poll_dt_s)
-
-            if not captured:
-                return False, (
-                    f"calibration timed out at {_PRETTY[name]} — hold your finger still on the corner."
-                )
-
-        ok, msg = self.mapper.calibrate(fingertip_pts, region_pts)
-        if ok:
-            say("[calibration] done — region calibration active for this session.")
-        return ok, msg
+    def status(self) -> Dict[str, Any]:
+        health = self.tracker.get_health()
+        return {
+            "source": "hand",
+            "running": self._running and health.running,
+            "last_error": self._last_error or health.last_error,
+            "calibrated": self.mapper.has_calibration(),
+        }

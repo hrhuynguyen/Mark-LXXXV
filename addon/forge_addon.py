@@ -172,6 +172,7 @@ class ForgeServer:
             "get_scene_info": self.get_scene_info,
             "get_object_info": self.get_object_info,
             "get_view_geometry": self.get_view_geometry,
+            "get_window_geometry": self.get_window_geometry,
             "pick_object_at": self.pick_object_at,
         }
         handler = handlers.get(cmd_type)
@@ -268,6 +269,28 @@ class ForgeServer:
             },
             "is_perspective": rv3d.is_perspective,
             "view_distance": float(rv3d.view_distance),
+        }
+
+    def get_window_geometry(self):
+        """Window position/size (points) + VIEW_3D region offset/size (pixels) +
+        HiDPI pixel_size. The client uses these to convert a screen-space hand
+        cursor into region pixels for picking (see client/cursor/viewport.py)."""
+        win = bpy.context.window
+        _area, region, _rv3d = self._get_view3d()
+        return {
+            "window": {
+                "x": int(win.x),
+                "y": int(win.y),
+                "width": int(win.width),
+                "height": int(win.height),
+            },
+            "region": {
+                "x": int(region.x),
+                "y": int(region.y),
+                "width": int(region.width),
+                "height": int(region.height),
+            },
+            "pixel_size": float(bpy.context.preferences.system.pixel_size),
         }
 
     def pick_object_at(self, region_x, region_y):
