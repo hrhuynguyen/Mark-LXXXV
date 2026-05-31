@@ -14,9 +14,10 @@ from __future__ import annotations
 import math
 import statistics
 import time
+from collections import deque
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
-from .mapper import CursorMapper
+from .mapper import CursorMapper, ScreenToRegionAffine
 from .types import CursorSample
 from .ui_overlay import ScreenDotOverlay, ScreenTargetOverlay
 from .webcam_tracker import WebcamFingerTracker
@@ -66,6 +67,7 @@ class HandCursorProvider:
         mirror: bool = True,
         preview: bool = True,
         preview_window: bool = True,
+        landmark_id: int = 8,
         overlay: bool = True,
         overlay_radius: int = 10,
         calibration_target_radius: int = 48,
@@ -79,6 +81,7 @@ class HandCursorProvider:
             mirror=mirror,
             preview_enabled=preview,
             preview_window_enabled=preview_window,
+            landmark_id=landmark_id,
         )
         self.mapper = mapper or CursorMapper(smoothing=smoothing, stale_timeout_s=stale_timeout_s)
 
@@ -92,6 +95,7 @@ class HandCursorProvider:
         self.tracker_start_timeout_s = float(max(0.5, tracker_start_timeout_s))
         self._running = False
         self._last_error: Optional[str] = None
+        self.screen_to_region: Optional[ScreenToRegionAffine] = None
 
     def start(self) -> bool:
         if self.overlay is not None:
@@ -253,6 +257,123 @@ class HandCursorProvider:
         say("[calibration] Completed. Calibration is active for this session.")
         return True, msg
 
+    def calibrate_viewport_anchors(
+        self,
+        region_w: int,
+        region_h: int,
+        *,
+        announce: Optional[Callable[[str], None]] = None,
+        dwell_s: float = 0.6,
+        stability_px: float = 14.0,
+        rearm_px: float = 120.0,
+        min_samples: int = 5,
+        target_timeout_s: float = 30.0,
+        poll_dt_s: float = 0.02,
+    ) -> Tuple[bool, str]:
+        """Anchor the viewport: with the (already screen-calibrated) dot, the user
+        parks it on the viewport's top-left then bottom-right corners and holds.
+
+        Captures the *screen* cursor at each, pairs with the region corners, and
+        builds a ScreenToRegionAffine. The second corner must be armed by moving
+        the dot away (> ``rearm_px``) so both captures aren't taken at once.
+        """
+        say = announce or print
+        corners = [("TOP-LEFT", (0.0, float(region_h))), ("BOTTOM-RIGHT", (float(region_w), 0.0))]
+        screen_anchors: List[Tuple[float, float]] = []
+        missing_notice_deadline = 0.0
+        last_capture: Optional[Tuple[float, float]] = None
+
+        say("[anchor] Now park the dot on two corners of the Blender 3D VIEWPORT itself.")
+
+        for idx, (label, _region) in enumerate(corners, start=1):
+            say(f"[anchor] {idx}/2 — put the dot on the {label} corner of the viewport and hold.")
+            window: deque = deque()  # (ts, screen_x, screen_y)
+            deadline = time.time() + target_timeout_s
+            captured = False
+            armed = last_capture is None
+            armed_notice_deadline = 0.0
+
+            while time.time() < deadline:
+                self.pump_ui()
+                cursor = self.get_cursor()  # drives the dot + returns screen point
+                now = time.time()
+
+                if cursor is None:
+                    window.clear()
+                    if now >= missing_notice_deadline:
+                        say("[anchor] hand not detected — keep one hand visible.")
+                        missing_notice_deadline = now + 1.5
+                    time.sleep(poll_dt_s)
+                    continue
+
+                if not armed:
+                    if last_capture is not None and math.hypot(
+                        cursor.x - last_capture[0], cursor.y - last_capture[1]
+                    ) >= rearm_px:
+                        armed = True
+                    else:
+                        if now >= armed_notice_deadline:
+                            say("[anchor]   …move the dot to the other corner.")
+                            armed_notice_deadline = now + 1.5
+                        window.clear()
+                        time.sleep(poll_dt_s)
+                        continue
+
+                window.append((now, float(cursor.x), float(cursor.y)))
+                while window and now - window[0][0] > dwell_s:
+                    window.popleft()
+
+                if len(window) >= min_samples and (now - window[0][0]) >= dwell_s * 0.8:
+                    xs = [p[1] for p in window]
+                    ys = [p[2] for p in window]
+                    if (max(xs) - min(xs)) <= stability_px and (max(ys) - min(ys)) <= stability_px:
+                        median = (statistics.median(xs), statistics.median(ys))
+                        screen_anchors.append(median)
+                        last_capture = median
+                        say(f"[anchor] captured {label}.")
+                        captured = True
+                        break
+                time.sleep(poll_dt_s)
+
+            if not captured:
+                return False, f"anchoring timed out at {label} — hold the dot still on the corner."
+
+        s2r = ScreenToRegionAffine.from_anchors(
+            screen_anchors[0], screen_anchors[1], region_w, region_h
+        )
+        if s2r is None:
+            return False, "viewport anchors too close together — try again, corners further apart."
+        self.screen_to_region = s2r
+        say("[anchor] Done — the dot now maps onto the viewport.")
+        return True, "viewport anchored"
+
+    def region_point(self) -> Optional[Tuple[float, float]]:
+        """Current cursor mapped to Blender region px (drives the dot), or None."""
+        if self.screen_to_region is None:
+            return None
+        cursor = self.get_cursor()  # drives the dot
+        if cursor is None:
+            return None
+        return self.screen_to_region.map(cursor.x, cursor.y)
+
+    def region_point_debug(self) -> Optional[Dict[str, Any]]:
+        """Like region_point() but also returns the raw palm-normalized coords and
+        the screen-dot position, for live debugging. Drives the dot. None if no
+        anchoring or no cursor."""
+        if self.screen_to_region is None:
+            return None
+        sample = self.tracker.get_latest_sample()
+        cursor = self._map_sample_to_cursor(sample)  # drives the dot
+        if cursor is None:
+            return None
+        rx, ry = self.screen_to_region.map(cursor.x, cursor.y)
+        return {
+            "norm": (sample.x, sample.y) if sample is not None else None,
+            "screen": (cursor.x, cursor.y),
+            "region": (rx, ry),
+            "stale": sample is None,  # True => using last-known cursor (no live hand)
+        }
+
     def status(self) -> Dict[str, Any]:
         health = self.tracker.get_health()
         return {
@@ -260,4 +381,5 @@ class HandCursorProvider:
             "running": self._running and health.running,
             "last_error": self._last_error or health.last_error,
             "calibrated": self.mapper.has_calibration(),
+            "viewport_anchored": self.screen_to_region is not None,
         }

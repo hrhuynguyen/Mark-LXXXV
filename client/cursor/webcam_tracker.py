@@ -1,8 +1,14 @@
 """client.cursor.webcam_tracker
 
-MediaPipe index-fingertip tracker (lifted from Wand). Frame capture + detection
-run in a worker thread; the latest fingertip is exposed as a NormalizedSample
+MediaPipe hand tracker (lifted from Wand). Frame capture + detection run in a
+worker thread; the latest tracked landmark is exposed as a NormalizedSample
 (0..1, y-down). Preview rendering stays on the main thread via pump_preview().
+
+Tracked landmark is configurable (landmark_id). Default is the index fingertip
+(8): it swings widely when you point by rotating the wrist, giving the movement
+range needed for precise aiming. The palm (RING_FINGER_MCP, 9) is steadier but
+barely moves for rotation-style pointing — pick it only if you aim by
+translating your whole hand (handTrack-style).
 
 The bundled model lives at client/models/hand_landmarker.task (copied in Step 0b).
 Step 10 extends this to expose full 21-landmark hands for gesture recognition.
@@ -48,7 +54,7 @@ class WebcamFingerTracker:
         preview_window_enabled: bool = True,
         min_detection_confidence: float = 0.6,
         min_tracking_confidence: float = 0.5,
-        index_tip_id: int = 8,
+        landmark_id: int = 8,  # 8 = index fingertip (wide range); 9 = palm (steady, small range)
         num_hands: int = 1,
         preview_scale: float = 0.24,
         preview_margin: int = 24,
@@ -60,7 +66,7 @@ class WebcamFingerTracker:
 
         self.min_detection_confidence = float(min_detection_confidence)
         self.min_tracking_confidence = float(min_tracking_confidence)
-        self.index_tip_id = int(index_tip_id)
+        self.landmark_id = int(landmark_id)
         self.num_hands = int(max(1, num_hands))
         self.preview_scale = float(min(0.9, max(0.1, preview_scale)))
         self.preview_margin = int(max(0, preview_margin))
@@ -195,10 +201,10 @@ class WebcamFingerTracker:
             return None
 
         landmarks = result.hand_landmarks[0]
-        if not 0 <= self.index_tip_id < len(landmarks):
+        if not 0 <= self.landmark_id < len(landmarks):
             return None
 
-        tip = landmarks[self.index_tip_id]
+        tip = landmarks[self.landmark_id]
         score = 1.0
         if result.handedness and result.handedness[0]:
             score = float(result.handedness[0][0].score)

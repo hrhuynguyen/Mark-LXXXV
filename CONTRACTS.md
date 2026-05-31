@@ -93,6 +93,8 @@ Reused from BlenderMCP (`addon.py` socket server; `BlenderConnection.send_comman
 - **No length framing.** A message is complete when the accumulated bytes parse as one valid JSON object (BlenderMCP behavior). Keep payloads reasonable; large blobs (screenshots) go via temp file (§4) or base64.
 - Default host/port: `BLENDER_HOST=localhost`, `BLENDER_PORT=9876` (env-overridable).
 - The addon executes every command on **Blender's main thread** via `bpy.app.timers.register` — handlers must be main-thread-safe.
+- **Client relays generically (Step 4).** `local_executor` forwards the server's `tool_call` `{tool, args}` straight to `blender_bridge.send_command(tool, args)` and returns the `result` — it does not enumerate tools. The tool *set* is defined server-side (Step 5); the addon validates unknown commands. The synchronous socket call is offloaded to a thread so the client's asyncio loop (audio/cursor) never blocks.
+- **Auto-start (Step 4).** `client/blender_launcher.py` brings Blender up with env `FORGE_AUTOSTART=1` + `FORGE_PORT`; the addon's `register()` then starts the socket server on a deferred `bpy.app.timers` call (no manual "Connect"). If the socket is already up, the launcher attaches instead. The manual Connect/Disconnect panel still works.
 
 ### 3.2 Request
 ```jsonc
@@ -116,7 +118,7 @@ Reused from BlenderMCP (`addon.py` socket server; `BlenderConnection.send_comman
 |---|---|---|---|
 | `get_view_geometry` | `{}` | `{"region": {"x","y","width","height"}, "is_perspective", "view_distance"}` | 2 |
 | `get_window_geometry` | `{}` | `{"window": {"x","y","width","height"} (pts), "region": {"x","y","width","height"} (px), "pixel_size"}` | 3 |
-| `pick_object_at` | `{"region_x": int, "region_y": int}` | `{"hit": bool, "name"?, "type"?, "hit_location"?: [x,y,z], "hit_normal"?, "world_bounding_box"?: [[minx,miny,minz],[maxx,maxy,maxz]]}` | 2 |
+| `pick_object_at` | `{"region_x": int, "region_y": int, "radius"?: float=80}` | `{"hit": bool, "name"?, "type"?, "hit_location"?: [x,y,z], "hit_normal"?, "world_bounding_box"?: [[minx,miny,minz],[maxx,maxy,maxz]]}` | 2 |
 | `set_part_transform` | `{"name": str, "delta": Delta}` | `{"name","location":[x,y,z],"rotation":[x,y,z],"scale":[x,y,z],"world_bounding_box"}` | 9 |
 | `orbit_view` | `{"d_azimuth": float, "d_elevation": float}` (radians) | `{"ok": true}` | 11 |
 | `zoom_view` | `{"factor": float}` (>1 = closer) | `{"ok": true}` | 11 |

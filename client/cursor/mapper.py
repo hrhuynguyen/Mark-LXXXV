@@ -1,12 +1,18 @@
 """client.cursor.mapper
 
-Hand→screen homography + smoothing (lifted from Wand). Maps the normalized
-fingertip (0..1) to screen pixels so the hand acts as a mouse cursor; calibrated
-from 4 screen-corner correspondences via cv2.getPerspectiveTransform.
+Hand→screen mapping + smoothing. Maps the normalized palm landmark (0..1) to
+screen pixels so the hand acts as a mouse cursor.
 
-Forge keeps this screen-space mapping (it gives the easy "cursor + rings"
-calibration UX) and converts the resulting screen point to Blender region pixels
-for picking — see client/cursor/viewport.py.
+Default mapping is handTrack-style **absolute linear inner-area** (no calibration):
+the central ``inner_area_percent`` of the camera frame maps linearly onto the
+full screen via interp, so you reach the screen edges without pushing your hand
+to the noisy frame edges, and a given hand position always lands on the same
+screen point. This replaced a 4-corner cv2 homography that could collapse to a
+corner when a ring sample was bad. A homography path is still available
+(``calibrate_from_correspondences``) but is not used by default.
+
+Forge converts the resulting screen point to Blender region pixels for picking
+via the two-corner ScreenToRegionAffine below.
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ class CursorMapper:
         screen_geometry: Optional[ScreenGeometry] = None,
         smoothing: float = 0.35,
         stale_timeout_s: float = 0.4,
+        inner_area_percent: float = 0.7,
     ) -> None:
         if screen_geometry is None:
             geom = get_builtin_display_geometry()
@@ -51,6 +58,8 @@ class CursorMapper:
         self.screen_geometry = screen_geometry
         self.smoothing = float(min(1.0, max(0.0, smoothing)))
         self.stale_timeout_s = float(max(0.0, stale_timeout_s))
+        # central fraction of the camera frame that maps to the full screen
+        self.inner_area_percent = float(min(1.0, max(0.1, inner_area_percent)))
 
         self._smoothed_xy: Optional[Tuple[float, float]] = None
         self._last_cursor: Optional[CursorSample] = None
@@ -157,6 +166,51 @@ class CursorMapper:
             mapped = cv2.perspectiveTransform(pts, self._homography)
             return float(mapped[0][0][0]), float(mapped[0][0][1])
 
-        raw_x = x_norm * (self.screen_geometry.width - 1)
-        raw_y = y_norm * (self.screen_geometry.height - 1)
+        # handTrack-style absolute linear inner-area map: the central
+        # inner_area_percent of the frame spans the full screen (interp clamps
+        # at the edges). update_from_normalized clamps the result to the screen.
+        margin = (1.0 - self.inner_area_percent) / 2.0
+        lo, hi = margin, 1.0 - margin
+        raw_x = float(np.interp(x_norm, (lo, hi), (0.0, self.screen_geometry.width - 1)))
+        raw_y = float(np.interp(y_norm, (lo, hi), (0.0, self.screen_geometry.height - 1)))
         return raw_x, raw_y
+
+
+@dataclass(frozen=True)
+class ScreenToRegionAffine:
+    """Maps an accurate screen-space cursor (points, top-left origin) to Blender
+    region pixels (bottom-left origin), fit empirically from two opposite
+    viewport corners the user points at. No window geometry / HiDPI assumptions:
+    the scale and offset come straight from where the cursor actually landed.
+
+      top-left screen anchor  (ax, ay) <-> region (0, H)
+      bottom-right screen anchor (bx, by) <-> region (W, 0)
+    """
+
+    ax: float
+    ay: float
+    bx: float
+    by: float
+    width: int
+    height: int
+
+    @classmethod
+    def from_anchors(
+        cls,
+        top_left_screen: Tuple[float, float],
+        bottom_right_screen: Tuple[float, float],
+        width: int,
+        height: int,
+    ) -> Optional["ScreenToRegionAffine"]:
+        ax, ay = top_left_screen
+        bx, by = bottom_right_screen
+        if abs(bx - ax) < 1e-6 or abs(by - ay) < 1e-6:
+            return None  # degenerate (anchors not spread out)
+        return cls(ax, ay, bx, by, int(width), int(height))
+
+    def map(self, screen_x: float, screen_y: float) -> Tuple[float, float]:
+        rx = (screen_x - self.ax) / (self.bx - self.ax) * self.width
+        ry = (self.by - screen_y) / (self.by - self.ay) * self.height  # flip to bottom-left
+        rx = min(max(rx, 0.0), self.width - 1.0)
+        ry = min(max(ry, 0.0), self.height - 1.0)
+        return rx, ry
