@@ -255,6 +255,7 @@ Wand's tracker uses only landmark 8 (index tip). Extend it to the full 21-landma
 
 ### Phase 3 — Gesture navigation
 - 21-landmark hand mouse controller; thumb-ring orbit / thumb-middle zoom / peace-sign pan through Blender's native mouse bindings. *Current test path:* `scripts/run_prompt_gesture_test.py` lets the user type a Text2Blender prompt while hand gestures control Blender. *Exit:* hands-only orbit/zoom/pan feels responsive (<150 ms).
+- **Demo frontend overlay:** `scripts/run_demo_ui.py` serves a local UI shell with the live Blender viewport on the main stage, the face/hand camera tile pinned to the top-right, and a terminal simulation pinned to the bottom-right. The browser polls `/api/blender/screenshot`; the local server talks to the Blender socket through `get_viewport_screenshot` or an `execute_code` VIEW_3D screenshot fallback. The camera tile uses browser `getUserMedia`, draws MediaPipe hand landmarks when the runtime is available, and falls back to a local gesture visualization. The server exposes only `client/demo_ui` and `client/models/hand_landmarker.task`, not `.env` or the repo root.
 
 - **Local persistence** lands here: save/load `.blend` + registry JSON to disk (`bpy.ops.wm.save_as_mainfile`); registry kept JSON-serializable. *Exit:* "save this build" / "reopen the Falcon 9" round-trips locally.
 

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Forge Demo UI</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="stage" aria-label="Blender workspace">
+        <canvas id="sceneCanvas" class="scene-canvas"></canvas>
+        <img id="blenderFrame" class="blender-frame" alt="Live Blender viewport">
+        <div id="blenderFallback" class="blender-fallback">Waiting for Blender screen</div>
+        <div class="top-bar">
+          <div>
+            <p class="eyebrow">Forge Live</p>
+            <h1>Blender Workshop</h1>
+          </div>
+          <div class="status-strip" aria-label="System status">
+            <span class="status-dot"></span>
+            <span id="routeLabel">Voice + gesture ready</span>
+          </div>
+        </div>
+        <div class="gesture-rail" aria-label="Gesture modes">
+          <button class="gesture-chip active" data-mode="point" type="button">Point</button>
+          <button class="gesture-chip" data-mode="orbit" type="button">Orbit</button>
+          <button class="gesture-chip" data-mode="zoom" type="button">Zoom</button>
+          <button class="gesture-chip" data-mode="pan" type="button">Pan</button>
+        </div>
+      </section>
+
+      <aside class="camera-panel" aria-label="Face and hand gesture preview">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Operator</p>
+            <h2>Face + Hand</h2>
+          </div>
+          <button id="cameraButton" class="icon-button" type="button" title="Start camera" aria-label="Start camera">
+            <span class="camera-glyph" aria-hidden="true"></span>
+          </button>
+        </div>
+        <div class="video-wrap">
+          <video id="cameraVideo" autoplay playsinline muted></video>
+          <canvas id="handCanvas"></canvas>
+          <div id="cameraFallback" class="camera-fallback">Camera paused</div>
+        </div>
+        <div class="gesture-readout">
+          <div>
+            <span class="readout-label">Gesture</span>
+            <strong id="gestureLabel">Neutral</strong>
+          </div>
+          <div>
+            <span class="readout-label">Confidence</span>
+            <strong id="confidenceLabel">--</strong>
+          </div>
+        </div>
+      </aside>
+
+      <aside class="terminal-panel" aria-label="Terminal simulation">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Runtime</p>
+            <h2>Terminal</h2>
+          </div>
+          <button id="clearButton" class="text-button" type="button">Clear</button>
+        </div>
+        <div id="terminalOutput" class="terminal-output" role="log" aria-live="polite"></div>
+        <form id="terminalForm" class="terminal-form">
+          <label class="prompt-label" for="terminalInput">prompt&gt;</label>
+          <input id="terminalInput" autocomplete="off" spellcheck="false" value="Hey Travis, build a detailed rocket">
+          <button id="voiceButton" class="mic-button" type="button" title="Speak command" aria-label="Speak command"></button>
+          <button type="submit">Run</button>
+        </form>
+      </aside>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
