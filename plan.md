@@ -345,9 +345,10 @@ forge/
 
 ### Phase 0 — De-risking spikes
 
-#### [ ] Step 1 — Client → Blender socket round-trip (Spike S1)
+#### [x] Step 1 — Client → Blender socket round-trip (Spike S1) ✅ DONE
 **Goal:** the client can drive the live Blender scene.
-**Files:** `client/blender_bridge.py` (new), throwaway `scripts/spike_cube.py`.
+**Files:** `client/blender_bridge.py` (done), `tests/test_blender_bridge.py` (mock-server unit tests), `scripts/{spike_cube.py, run_spike_headless.py, _spike_blender_server.py}`.
+**Done:** lifted `BlenderConnection` into `client/blender_bridge.py` (typed `BlenderError`, context manager, env-driven host/port, 180 s timeout, no-framing receive-until-valid-JSON per CONTRACTS §3). Verified two ways: (a) `pytest` against a mock server incl. a fragmented reply (4 passed); (b) **real-`bpy` round-trip** via `run_spike_headless.py` → launches headless Blender 5.1.2, the bridge sends `execute_code`, a cube is created (`added: 1`), returns `{"executed": true, ...}`. The in-GUI cube (`scripts/spike_cube.py` + "Connect" panel) lands with the persistent addon in Step 2.
 **Do:** lift BlenderMCP's `BlenderConnection.send_command` / `receive_full_response` into `blender_bridge.py`. Click "Connect" in Blender's panel (starts the socket server on 9876). Run a script that sends one command:
 ```python
 # scripts/spike_cube.py
