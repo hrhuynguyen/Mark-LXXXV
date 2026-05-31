@@ -51,6 +51,131 @@ bl_info = {
 
 DEFAULT_PORT = 9876
 
+_CALIBRATION_DRAW_HANDLE = None
+_CALIBRATION_REDRAW_TIMER_RUNNING = False
+_CALIBRATION_MARKERS = {
+    "mode": "hidden",
+    "started_at": 0.0,
+    "expires_at": 0.0,
+}
+
+
+def _tag_view3d_redraw():
+    screen = getattr(bpy.context, "screen", None)
+    if screen is None:
+        return
+    for area in screen.areas:
+        if area.type == "VIEW_3D":
+            area.tag_redraw()
+
+
+def _calibration_markers_active():
+    mode = _CALIBRATION_MARKERS.get("mode")
+    expires_at = float(_CALIBRATION_MARKERS.get("expires_at") or 0.0)
+    return mode in {"targets", "complete"} and time.time() < expires_at
+
+
+def _draw_circle(shader, batch_for_shader, center_x, center_y, radius, color, segments=36):
+    verts = [(float(center_x), float(center_y))]
+    for idx in range(segments + 1):
+        ang = 2.0 * math.pi * idx / segments
+        verts.append((float(center_x) + radius * math.cos(ang), float(center_y) + radius * math.sin(ang)))
+    batch = batch_for_shader(shader, "TRI_FAN", {"pos": verts})
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch.draw(shader)
+
+
+def _draw_ring(shader, batch_for_shader, center_x, center_y, radius, color, segments=48):
+    outer = float(radius)
+    inner = max(1.0, outer - 4.0)
+    verts = []
+    for idx in range(segments + 1):
+        ang = 2.0 * math.pi * idx / segments
+        verts.append((float(center_x) + outer * math.cos(ang), float(center_y) + outer * math.sin(ang)))
+        verts.append((float(center_x) + inner * math.cos(ang), float(center_y) + inner * math.sin(ang)))
+    batch = batch_for_shader(shader, "TRI_STRIP", {"pos": verts})
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch.draw(shader)
+
+
+def _draw_calibration_markers():
+    if not _calibration_markers_active():
+        return
+    try:
+        import gpu
+        from gpu_extras.batch import batch_for_shader
+    except Exception:  # pragma: no cover - Blender GUI dependency
+        return
+
+    region = bpy.context.region
+    if region is None or region.type != "WINDOW":
+        return
+
+    width = float(region.width)
+    height = float(region.height)
+    if width <= 0 or height <= 0:
+        return
+
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    mode = _CALIBRATION_MARKERS.get("mode")
+    started_at = float(_CALIBRATION_MARKERS.get("started_at") or time.time())
+    elapsed = max(0.0, time.time() - started_at)
+    pulse = 0.5 + 0.5 * math.sin(elapsed * math.tau * 2.2)
+
+    margin = 46.0
+    points = [(margin, height - margin), (width - margin, margin)]
+    if mode == "complete":
+        radius = 24.0 + 16.0 * pulse
+        alpha = 0.35 + 0.45 * pulse
+        for x, y in points:
+            _draw_ring(shader, batch_for_shader, x, y, radius, (0.18, 1.0, 0.92, alpha))
+            _draw_circle(shader, batch_for_shader, x, y, 9.0, (0.18, 1.0, 0.92, 0.9))
+        return
+
+    for x, y in points:
+        _draw_ring(shader, batch_for_shader, x, y, 28.0, (0.18, 0.96, 0.92, 0.9))
+        _draw_circle(shader, batch_for_shader, x, y, 8.0, (0.18, 0.96, 0.92, 0.95))
+
+
+def _ensure_calibration_draw_handler():
+    global _CALIBRATION_DRAW_HANDLE
+    if bpy.app.background:
+        return False
+    if _CALIBRATION_DRAW_HANDLE is None:
+        _CALIBRATION_DRAW_HANDLE = bpy.types.SpaceView3D.draw_handler_add(
+            _draw_calibration_markers, (), "WINDOW", "POST_PIXEL"
+        )
+    return True
+
+
+def _remove_calibration_draw_handler():
+    global _CALIBRATION_DRAW_HANDLE
+    if _CALIBRATION_DRAW_HANDLE is not None:
+        try:
+            bpy.types.SpaceView3D.draw_handler_remove(_CALIBRATION_DRAW_HANDLE, "WINDOW")
+        except Exception:
+            pass
+        _CALIBRATION_DRAW_HANDLE = None
+
+
+def _calibration_redraw_timer():
+    global _CALIBRATION_REDRAW_TIMER_RUNNING
+    _tag_view3d_redraw()
+    if _calibration_markers_active():
+        return 0.05
+    _CALIBRATION_MARKERS["mode"] = "hidden"
+    _CALIBRATION_REDRAW_TIMER_RUNNING = False
+    return None
+
+
+def _start_calibration_redraw_timer():
+    global _CALIBRATION_REDRAW_TIMER_RUNNING
+    if not _CALIBRATION_REDRAW_TIMER_RUNNING:
+        _CALIBRATION_REDRAW_TIMER_RUNNING = True
+        bpy.app.timers.register(_calibration_redraw_timer, first_interval=0.0)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Socket server
@@ -178,6 +303,9 @@ class ForgeServer:
             "pick_object_at": self.pick_object_at,
             "get_viewport_screenshot": self.get_viewport_screenshot,
             "frame_object": self.frame_object,
+            "show_calibration_guides": self.show_calibration_guides,
+            "show_calibration_complete": self.show_calibration_complete,
+            "clear_calibration_guides": self.clear_calibration_guides,
         }
         handler = handlers.get(cmd_type)
         if not handler:
@@ -296,6 +424,46 @@ class ForgeServer:
             },
             "pixel_size": float(bpy.context.preferences.system.pixel_size),
         }
+
+    def show_calibration_guides(self, duration=45.0):
+        """Draw cyan target spots at the VIEW_3D top-left and bottom-right.
+
+        These are visual guides only; the actual calibration still uses the
+        user's yellow screen cursor captured by the companion app.
+        """
+        _ensure_calibration_draw_handler()
+        duration = max(1.0, float(duration))
+        _CALIBRATION_MARKERS.update(
+            {
+                "mode": "targets",
+                "started_at": time.time(),
+                "expires_at": time.time() + duration,
+            }
+        )
+        _start_calibration_redraw_timer()
+        _tag_view3d_redraw()
+        return {"ok": True, "visible": not bpy.app.background, "mode": "targets"}
+
+    def show_calibration_complete(self, duration=1.6):
+        """Pulse the cyan viewport spots to confirm calibration completed."""
+        _ensure_calibration_draw_handler()
+        duration = max(0.5, float(duration))
+        _CALIBRATION_MARKERS.update(
+            {
+                "mode": "complete",
+                "started_at": time.time(),
+                "expires_at": time.time() + duration,
+            }
+        )
+        _start_calibration_redraw_timer()
+        _tag_view3d_redraw()
+        return {"ok": True, "visible": not bpy.app.background, "mode": "complete"}
+
+    def clear_calibration_guides(self):
+        """Hide calibration guide markers."""
+        _CALIBRATION_MARKERS.update({"mode": "hidden", "started_at": 0.0, "expires_at": 0.0})
+        _tag_view3d_redraw()
+        return {"ok": True}
 
     def pick_object_at(self, region_x, region_y, radius=80.0):
         """Raycast from a region pixel into the scene; return the hit object.
@@ -482,6 +650,7 @@ def unregister():
     if getattr(bpy.types, "forge_server", None):
         bpy.types.forge_server.stop()
         del bpy.types.forge_server
+    _remove_calibration_draw_handler()
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
     del bpy.types.Scene.forge_port

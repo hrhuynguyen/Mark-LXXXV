@@ -314,9 +314,14 @@ class CompanionWindowController:
         except Exception as exc:
             self.state.set_calibration_state("uncalibrated", f"Blender unavailable: {exc}")
             return
+        self._send_calibration_overlay("show_calibration_guides", {"duration": 45.0})
         ok, msg = self.provider.calibrate_viewport_anchors(
             region["width"], region["height"], announce=self._calibration_announce
         )
+        if ok:
+            self._send_calibration_overlay("show_calibration_complete", {"duration": 1.6})
+        else:
+            self._send_calibration_overlay("clear_calibration_guides", {})
         self.state.set_calibration_state("calibrated" if ok else "uncalibrated", msg)
         self.state.record_local_event(
             request_id=self.state.session_id,
@@ -578,6 +583,17 @@ class CompanionWindowController:
 
     def _calibration_announce(self, message: str) -> None:
         self.state.set_calibration_state("uncalibrated", message)
+
+    def _send_calibration_overlay(self, command: str, params: dict) -> None:
+        try:
+            self.bridge.send_command(command, params)
+        except Exception as exc:
+            self.state.record_local_event(
+                request_id=self.state.session_id,
+                event="calibration_overlay",
+                status="error",
+                summary=f"{command}: {exc}",
+            )
 
 
 def _make_small_button(title: str, frame) -> AppKit.NSButton:
