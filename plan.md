@@ -198,6 +198,7 @@ Wand's tracker uses only landmark 8 (index tip). Extend it to the full 21-landma
 
 | Gesture | Signal | Action (→ Blender) |
 |---|---|---|
+<<<<<<< Updated upstream
 | Point | index extended | move cursor (existing Wand behavior) |
 | Pinch-hold + drag | thumb–index distance < ε, then move | **orbit** view (`rv3d.view_rotation`) |
 | Two-hand spread/pinch | inter-hand distance delta | **zoom** (`rv3d.view_distance`) |
@@ -206,6 +207,20 @@ Wand's tracker uses only landmark 8 (index tip). Extend it to the full 21-landma
 
 - Implement `GestureRecognizer` consuming MediaPipe landmarks; emit discrete gesture events + continuous deltas.
 - Navigation is sent as dedicated low-latency Blender tools (`orbit_view`/`zoom_view`/`pan_view`) that mutate `RegionView3D` directly (cleaner than `bpy.ops.view3d.*` with context override).
+=======
+| Point | no touch gesture | move the real cursor from ring-finger MCP |
+| Thumb-index touch | handTrack adaptive touch distance | **left mouse down**; release fingers → **left mouse up** (tap = click, hold/move = drag) |
+| Thumb-middle touch + vertical motion | adaptive touch distance + middle-tip delta | mouse wheel scroll → zoom |
+| Thumb-ring touch + drag | adaptive touch distance | hold **middle mouse** and drag → orbit |
+| Open-palm drag | four fingers extended | hold **Shift + middle mouse** and drag → pan |
+| Two-finger point | index + middle extended, ring/pinky curled | slower precision cursor movement |
+| Thumb-pinky touch | explicit release gesture | **stop/neutral** (exit nav mode) |
+| Fist | all fingers curled | **stop/neutral** (exit nav mode) |
+
+- Implement `HandMouseCursorProvider`/`HandMouseController` consuming MediaPipe 21-landmark hands.
+- Follow Google's MediaPipe Hand Landmarker task contract: run the bundled model in `VIDEO` mode, consume its 21 image landmarks, world landmarks, handedness, and confidence stream, and keep `num_hands=1` by default for latency/stability. Tune `min_hand_detection_confidence`, `min_hand_presence_confidence`, and `min_tracking_confidence` as live knobs.
+- Borrow Kazuhito00's MediaPipe gesture-recognition preprocessing pattern: convert landmarks to wrist-relative normalized coordinates before classifying static hand shapes, so taps/combos are less sensitive to camera distance. Reuse handTrack's key stabilization ideas: a centered inner camera area maps to the full screen; ring-finger MCP blended with palm center is the cursor anchor; low-confidence hands release safely; drag modes require consecutive frames; tiny motion is ignored to reduce jitter.
+>>>>>>> Stashed changes
 - **Mesh edits stay voice-driven** ("scale this", "make it taller") — more reliable and unambiguous than manipulation gestures.
 
 ---
@@ -434,6 +449,7 @@ class PartRegistry:
 
 ### Phase 3 — Gesture navigation
 
+<<<<<<< Updated upstream
 #### Step 10 — Gesture recognizer (21 landmarks)
 **Goal:** detect point / pinch / open-palm / fist / two-hand, mode-gated.
 **Files:** `client/cursor/webcam_tracker.py` (emit full landmarks + handedness), `client/gestures/recognizer.py` (new).
@@ -445,6 +461,21 @@ class PartRegistry:
 **Files:** `addon/forge_addon.py` (`orbit_view`, `zoom_view`, `pan_view`), `client/companion_runtime.py` (send nav deltas).
 **Do:** mutate `RegionView3D` directly: `orbit_view`→`view_rotation`, `zoom_view`→`view_distance`, `pan_view`→`view_location`. Stream deltas at gesture rate.
 **Verify:** pinch-drag orbits, two-hand spread zooms, palm-drag pans — responsive (<150 ms), smooth, no mesh changes.
+=======
+#### [~] Step 10 — handTrack-style hand mouse controller  *(code done + automated verified; live feel pending webcam tuning)*
+**Goal:** control/monitor the real mouse from hand gestures, following `small-cactus/handTrack`'s interaction model.
+**Files:** `client/cursor/webcam_tracker.py` (emit full 21 landmarks), `client/gestures/hand_mouse.py`, `client/companion_app.py`.
+**Done:** added `HandMouseCursorProvider` and `HandMouseController`: ring-finger MCP blended with palm center controls the real cursor through a centered inner camera area; thumb-index uses the original handTrack click model (`mouseDown` while touching, `mouseUp` on release, so tap=click and hold/move=drag); thumb-middle vertical motion scrolls for zoom; thumb-ring touch holds middle mouse for Blender orbit; open palm holds Shift+middle for pan; two-finger point uses slower precision movement; thumb-pinky, fist, low-confidence hands, and no-hand release all buttons. The webcam tracker now exposes MediaPipe image landmarks, world landmarks, handedness, and handedness confidence so gesture distances can use world-space geometry when available. The provider reports the actual mouse position back into Forge's cursor stream, and `--gesture-debug` now prints the active mode plus detected thumb touches and extended fingers. Automated Phase 0–3 runner passes; live client launches with MediaPipe + `--gestures`.
+**Do:** live tune inner-area percentage, smoothing, jitter threshold, and touch/scroll sensitivity if needed.
+**Verify:** real mouse follows the hand smoothly with <100 ms perceived latency; pointing/moving alone never clicks or navigates.
+
+#### [~] Step 11 — Native Blender mouse navigation  *(code done + live socket verified; live hand feel pending Blender GUI)*
+**Goal:** hands-only camera control through Blender's native mouse bindings instead of direct camera RPCs.
+**Files:** `client/gestures/hand_mouse.py`, `client/companion_runtime.py`, `client/companion_app.py`.
+**Done:** `--gestures` switches the hand provider into handTrack-style mouse mode; runtime just streams the cursor and executes tools, while the provider drives native middle-drag / wheel / Shift+middle gestures with a short consecutive-frame guard before drag modes. Live Phase 0–3 socket/addon checks pass after hot-reloading the current addon.
+**Do:** live tune mouse gesture mappings in Blender GUI.
+**Verify:** thumb-index touch/release clicks, thumb-index hold/move left-drags, thumb-ring drag orbits, thumb-middle vertical motion zooms, open-palm drag pans, thumb-pinky/fist releases — responsive (<150 ms), smooth, no mesh changes.
+>>>>>>> Stashed changes
 
 #### Step 12 — Local persistence
 **Goal:** save/reopen a build locally.
