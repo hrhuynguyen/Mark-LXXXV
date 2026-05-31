@@ -12,7 +12,7 @@ This is adapted from https://github.com/small-cactus/handTrack:
 Forge maps those mouse gestures onto Blender-friendly defaults:
 * thumb/index touch holds left mouse; release sends mouse up, matching handTrack;
 * thumb/ring drag uses the middle mouse button, so Blender orbits;
-* open-palm drag holds Shift+middle mouse, so Blender pans;
+* peace-sign drag holds Shift+middle mouse, so Blender pans;
 * thumb/middle vertical motion scrolls, so Blender zooms.
 
 The gesture classification also follows the preprocessing pattern from
@@ -68,7 +68,6 @@ PALM_CENTER_POINTS = (WRIST, INDEX_MCP, MIDDLE_MCP, RING_MCP, PINKY_MCP)
 class HandMouseMode(str, Enum):
     IDLE = "idle"
     POINT = "point"
-    PRECISION_POINT = "precision_point"
     LEFT_DRAG = "left_drag"
     ORBIT_DRAG = "orbit_drag"
     PAN_DRAG = "pan_drag"
@@ -164,7 +163,6 @@ class HandMouseController:
     min_touch_threshold: float = 0.025
     jitter_threshold: float = 0.003
     smoothing: float = 0.35
-    precision_smoothing: float = 0.18
     scroll_threshold: float = 0.005
     scroll_sensitivity: float = 0.05
     mode_hold_frames: int = 2
@@ -186,7 +184,6 @@ class HandMouseController:
             self.screen = get_builtin_display_geometry()
         self.inner_area_percent = max(0.25, min(1.0, float(self.inner_area_percent)))
         self.smoothing = max(0.0, min(1.0, float(self.smoothing)))
-        self.precision_smoothing = max(0.0, min(1.0, float(self.precision_smoothing)))
         self.mode_hold_frames = max(1, int(self.mode_hold_frames))
         self.min_hand_confidence = max(0.0, min(1.0, float(self.min_hand_confidence)))
 
@@ -212,8 +209,7 @@ class HandMouseController:
         pose = self._pose(landmarks, world_landmarks)
         desired_mode = self._desired_mode(pose)
         mode = self._stable_mode(desired_mode)
-        smoothing = self.precision_smoothing if mode == HandMouseMode.PRECISION_POINT else None
-        x, y, moved = self._move_pointer(pose.anchor_x, pose.anchor_y, smoothing=smoothing)
+        x, y, moved = self._move_pointer(pose.anchor_x, pose.anchor_y)
 
         def finish(event_mode: HandMouseMode, *, scroll_y: int = 0) -> HandMouseEvent:
             self._last_event = HandMouseEvent(
@@ -332,10 +328,8 @@ class HandMouseController:
             return HandMouseMode.SCROLL
         if pose.ring_thumb_touch:
             return HandMouseMode.ORBIT_DRAG
-        if pose.is_palm:
+        if pose.is_peace_sign:
             return HandMouseMode.PAN_DRAG
-        if pose.is_precision_point:
-            return HandMouseMode.PRECISION_POINT
         return HandMouseMode.POINT
 
     def _stable_mode(self, desired: HandMouseMode) -> HandMouseMode:
@@ -344,7 +338,6 @@ class HandMouseController:
             HandMouseMode.FIST,
             HandMouseMode.RELEASE,
             HandMouseMode.POINT,
-            HandMouseMode.PRECISION_POINT,
             HandMouseMode.LEFT_DRAG,
         }
         if desired in immediate or desired == self._active_mode:
@@ -578,7 +571,7 @@ class _Pose:
         return self.fingers_extended >= 4 and not self.any_touch
 
     @property
-    def is_precision_point(self) -> bool:
+    def is_peace_sign(self) -> bool:
         return (
             self.index_extended
             and self.middle_extended

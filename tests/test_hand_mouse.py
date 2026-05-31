@@ -153,7 +153,7 @@ def _pinky_pinch_hand() -> list[_Lm]:
     return pts
 
 
-def _precision_hand() -> list[_Lm]:
+def _peace_hand() -> list[_Lm]:
     pts = _hand()
     pts[8] = _Lm(0.45, 0.20)
     pts[12] = _Lm(0.55, 0.20)
@@ -265,18 +265,32 @@ def test_thumb_index_middle_still_prefers_left_drag_over_zoom():
     assert not mouse.shift_down
 
 
-def test_open_palm_holds_shift_middle_for_blender_pan():
+def test_peace_sign_holds_shift_middle_for_blender_pan():
+    mouse = FakeMouse()
+    controller = _controller(mouse)
+
+    event = controller.update(_peace_hand())
+
+    assert event.mode == HandMouseMode.PAN_DRAG
+    assert event.touches == ()
+    assert event.extended_fingers == ("index", "middle")
+    assert not mouse.left_down
+    assert mouse.middle_down
+    assert mouse.shift_down
+
+
+def test_open_palm_only_points_to_avoid_accidental_pan():
     mouse = FakeMouse()
     controller = _controller(mouse)
 
     event = controller.update(_palm_hand())
 
-    assert event.mode == HandMouseMode.PAN_DRAG
+    assert event.mode == HandMouseMode.POINT
     assert event.touches == ()
     assert event.extended_fingers == ("index", "middle", "ring", "pinky")
     assert not mouse.left_down
-    assert mouse.middle_down
-    assert mouse.shift_down
+    assert not mouse.middle_down
+    assert not mouse.shift_down
 
 
 def test_ring_thumb_touch_holds_middle_drag_for_blender_orbit():
@@ -309,18 +323,18 @@ def test_middle_thumb_vertical_motion_scrolls_for_blender_zoom():
     assert not mouse.shift_down
 
 
-def test_two_finger_point_uses_precision_mode_without_dragging():
+def test_peace_sign_replaces_precision_mode_for_pan():
     mouse = FakeMouse()
     controller = _controller(mouse)
 
-    event = controller.update(_precision_hand())
+    event = controller.update(_peace_hand())
 
-    assert event.mode == HandMouseMode.PRECISION_POINT
+    assert event.mode == HandMouseMode.PAN_DRAG
     assert event.touches == ()
     assert event.extended_fingers == ("index", "middle")
     assert not mouse.left_down
-    assert not mouse.middle_down
-    assert not mouse.shift_down
+    assert mouse.middle_down
+    assert mouse.shift_down
 
 
 def test_pinky_thumb_touch_releases_all_buttons():
@@ -376,7 +390,7 @@ def test_handtrack_click_uses_image_landmark_distance_not_world_override():
 def test_fist_releases_all_buttons():
     mouse = FakeMouse()
     controller = _controller(mouse)
-    controller.update(_palm_hand())
+    controller.update(_peace_hand())
 
     event = controller.update(_fist_hand())
 
@@ -401,10 +415,10 @@ def test_orbit_releases_middle_when_thumb_ring_separates():
     assert not mouse.shift_down
 
 
-def test_pan_releases_shift_middle_when_palm_closes_to_point():
+def test_pan_releases_shift_middle_when_peace_sign_closes_to_point():
     mouse = FakeMouse()
     controller = _controller(mouse)
-    controller.update(_palm_hand())
+    controller.update(_peace_hand())
     assert mouse.middle_down
     assert mouse.shift_down
 

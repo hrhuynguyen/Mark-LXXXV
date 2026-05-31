@@ -3,9 +3,6 @@
 MediaPipe fingertip + full-landmark tracker (reused from Wand; extended in Step 10).
 """
 
-<<<<<<< Updated upstream
-# Scaffold stub — implement per plan.md. Not yet wired up.
-=======
 from __future__ import annotations
 
 import threading
@@ -411,4 +408,3 @@ def _draw_hand_landmarks(frame, landmarks) -> None:
         cv2.line(frame, points[a], points[b], (80, 200, 255), 1)
     for point in points:
         cv2.circle(frame, point, 2, (0, 220, 120), -1)
->>>>>>> Stashed changes

@@ -3,9 +3,6 @@
 Overlay-only macOS app window (browser view removed). Launches Blender, draws cursor overlay, hosts mic/agent. Step 4.
 """
 
-<<<<<<< Updated upstream
-# Scaffold stub — implement per plan.md. Not yet wired up.
-=======
 from __future__ import annotations
 
 import argparse
@@ -203,4 +200,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
->>>>>>> Stashed changes

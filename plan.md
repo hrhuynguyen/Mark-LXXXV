@@ -198,29 +198,18 @@ Wand's tracker uses only landmark 8 (index tip). Extend it to the full 21-landma
 
 | Gesture | Signal | Action (→ Blender) |
 |---|---|---|
-<<<<<<< Updated upstream
-| Point | index extended | move cursor (existing Wand behavior) |
-| Pinch-hold + drag | thumb–index distance < ε, then move | **orbit** view (`rv3d.view_rotation`) |
-| Two-hand spread/pinch | inter-hand distance delta | **zoom** (`rv3d.view_distance`) |
-| Open-palm drag | flat hand, then move | **pan** (`rv3d.view_location`) |
-| Fist | all fingers curled | **stop/neutral** (exit nav mode) |
-
-- Implement `GestureRecognizer` consuming MediaPipe landmarks; emit discrete gesture events + continuous deltas.
-- Navigation is sent as dedicated low-latency Blender tools (`orbit_view`/`zoom_view`/`pan_view`) that mutate `RegionView3D` directly (cleaner than `bpy.ops.view3d.*` with context override).
-=======
 | Point | no touch gesture | move the real cursor from ring-finger MCP |
 | Thumb-index touch | handTrack adaptive touch distance | **left mouse down**; release fingers → **left mouse up** (tap = click, hold/move = drag) |
 | Thumb-middle touch + vertical motion | adaptive touch distance + middle-tip delta | mouse wheel scroll → zoom |
 | Thumb-ring touch + drag | adaptive touch distance | hold **middle mouse** and drag → orbit |
-| Open-palm drag | four fingers extended | hold **Shift + middle mouse** and drag → pan |
-| Two-finger point | index + middle extended, ring/pinky curled | slower precision cursor movement |
+| Peace-sign drag | index + middle extended, ring/pinky curled | hold **Shift + middle mouse** and drag → pan |
+| Open palm | four fingers extended | plain cursor movement only; avoids accidental pan |
 | Thumb-pinky touch | explicit release gesture | **stop/neutral** (exit nav mode) |
 | Fist | all fingers curled | **stop/neutral** (exit nav mode) |
 
 - Implement `HandMouseCursorProvider`/`HandMouseController` consuming MediaPipe 21-landmark hands.
 - Follow Google's MediaPipe Hand Landmarker task contract: run the bundled model in `VIDEO` mode, consume its 21 image landmarks, world landmarks, handedness, and confidence stream, and keep `num_hands=1` by default for latency/stability. Tune `min_hand_detection_confidence`, `min_hand_presence_confidence`, and `min_tracking_confidence` as live knobs.
 - Borrow Kazuhito00's MediaPipe gesture-recognition preprocessing pattern: convert landmarks to wrist-relative normalized coordinates before classifying static hand shapes, so taps/combos are less sensitive to camera distance. Reuse handTrack's key stabilization ideas: a centered inner camera area maps to the full screen; ring-finger MCP blended with palm center is the cursor anchor; low-confidence hands release safely; drag modes require consecutive frames; tiny motion is ignored to reduce jitter.
->>>>>>> Stashed changes
 - **Mesh edits stay voice-driven** ("scale this", "make it taller") — more reliable and unambiguous than manipulation gestures.
 
 ---
@@ -262,7 +251,7 @@ Wand's tracker uses only landmark 8 (index tip). Extend it to the full 21-landma
 - Cursor overlay on Blender; `pick_object_at` wired to "what's this?" and registry-driven edits. *Exit:* point at a leg + "scale these up 20%" scales *only* the legs and updates the registry.
 
 ### Phase 3 — Gesture navigation
-- 21-landmark `GestureRecognizer`; pinch-orbit / two-hand-zoom / palm-pan via `RegionView3D`. *Exit:* hands-only orbit/zoom/pan feels responsive (<150 ms).
+- 21-landmark `GestureRecognizer`; pinch-orbit / two-hand-zoom / peace-sign pan via `RegionView3D`. *Exit:* hands-only orbit/zoom/pan feels responsive (<150 ms).
 
 - **Local persistence** lands here: save/load `.blend` + registry JSON to disk (`bpy.ops.wm.save_as_mainfile`); registry kept JSON-serializable. *Exit:* "save this build" / "reopen the Falcon 9" round-trips locally.
 
@@ -420,14 +409,14 @@ class PartRegistry:
 ```
 **Verify:** after a build, `registry.to_json()` round-trips through `json.dumps`/`loads` with no errors and matches the scene's object names.
 
-#### Step 7 — Spec Agent + Build-Spec executor
-**Goal:** terse prompt → detailed, decomposed assembly.
-**Files:** `server/agents/spec_agent.py` (new), `server/agents/blender_agent.py` (executor + generator library).
+#### Step 7 — Spec Agent + Text2Blender Build-Spec executor
+**Goal:** terse prompt → detailed Build Spec → Text2Blender creates the object in Blender.
+**Files:** `server/agents/spec_agent.py` (new), `server/build/executor.py`, `server/build/text2blender_adapter.py`, local Text2Blender checkout at `/Users/dothanhtam91/Desktop/PROJECT /Text2Blender`.
 **Do:**
 - `spec_agent` = `gemini-2.5-flash`/`pro`, `AgentTool`, returns the **Build Spec** JSON (§5a). Instruction: target ~8–15 parts (medium LOD), ground in `search_agent` when the object is real, emit names/generators/params/placement/parent/materials.
-- In `blender_agent`, write a small **generator library** (`build_cylinder`, `build_engine_cluster`, `build_grid_fin`, `build_landing_leg`, …) and an **executor** that walks `spec.parts`, calls the matching generator, places via AABB, parents under a Collection, and registers each part.
+- In `server/build/executor.py`, convert the Build Spec into a concise Text2Blender prompt and run the local Text2Blender CLI from `/Users/dothanhtam91/Desktop/PROJECT /Text2Blender` using its standalone `.venv/bin/text2blender --prompt ...` flow. Register the resulting root object as `kind:"text2blender"`. Set `FORGE_USE_TEXT2BLENDER=0` or `spec["generator"]="procedural"` to use the older Forge procedural snippets.
 - Concierge: on a build intent → call `spec_agent` → speak one-sentence summary → run executor immediately (no blocking questions).
-**Verify:** "Build a Falcon 9" → one spoken summary, then named `stage1_body / octaweb / grid_fin_* / landing_leg_* / interstage / stage2_body / fairing` (~8–15 parts) appear, correctly stacked (no clipping), all in the registry.
+**Verify:** "Build a Falcon 9" → one spoken summary, then Text2Blender creates the object in Blender through the same CLI used by the standalone Text2Blender project; the registry records the Text2Blender source path, CLI command, generated prompt, and root object entry.
 
 ---
 
@@ -449,23 +438,10 @@ class PartRegistry:
 
 ### Phase 3 — Gesture navigation
 
-<<<<<<< Updated upstream
-#### Step 10 — Gesture recognizer (21 landmarks)
-**Goal:** detect point / pinch / open-palm / fist / two-hand, mode-gated.
-**Files:** `client/cursor/webcam_tracker.py` (emit full landmarks + handedness), `client/gestures/recognizer.py` (new).
-**Do:** compute pinch via thumb(4)–index(8) distance, palm via finger-extension, two-hand spread via inter-hand distance; debounce; emit discrete events + continuous deltas; enter "nav mode" only on a held gesture so pointing ≠ navigating.
-**Verify:** the recognizer logs stable, debounced gesture states with <100 ms latency; pointing never triggers nav.
-
-#### Step 11 — Orbit / zoom / pan tools
-**Goal:** hands-only camera control.
-**Files:** `addon/forge_addon.py` (`orbit_view`, `zoom_view`, `pan_view`), `client/companion_runtime.py` (send nav deltas).
-**Do:** mutate `RegionView3D` directly: `orbit_view`→`view_rotation`, `zoom_view`→`view_distance`, `pan_view`→`view_location`. Stream deltas at gesture rate.
-**Verify:** pinch-drag orbits, two-hand spread zooms, palm-drag pans — responsive (<150 ms), smooth, no mesh changes.
-=======
 #### [~] Step 10 — handTrack-style hand mouse controller  *(code done + automated verified; live feel pending webcam tuning)*
 **Goal:** control/monitor the real mouse from hand gestures, following `small-cactus/handTrack`'s interaction model.
 **Files:** `client/cursor/webcam_tracker.py` (emit full 21 landmarks), `client/gestures/hand_mouse.py`, `client/companion_app.py`.
-**Done:** added `HandMouseCursorProvider` and `HandMouseController`: ring-finger MCP blended with palm center controls the real cursor through a centered inner camera area; thumb-index uses the original handTrack click model (`mouseDown` while touching, `mouseUp` on release, so tap=click and hold/move=drag); thumb-middle vertical motion scrolls for zoom; thumb-ring touch holds middle mouse for Blender orbit; open palm holds Shift+middle for pan; two-finger point uses slower precision movement; thumb-pinky, fist, low-confidence hands, and no-hand release all buttons. The webcam tracker now exposes MediaPipe image landmarks, world landmarks, handedness, and handedness confidence so gesture distances can use world-space geometry when available. The provider reports the actual mouse position back into Forge's cursor stream, and `--gesture-debug` now prints the active mode plus detected thumb touches and extended fingers. Automated Phase 0–3 runner passes; live client launches with MediaPipe + `--gestures`.
+**Done:** added `HandMouseCursorProvider` and `HandMouseController`: ring-finger MCP blended with palm center controls the real cursor through a centered inner camera area; thumb-index uses the original handTrack click model (`mouseDown` while touching, `mouseUp` on release, so tap=click and hold/move=drag); thumb-middle vertical motion scrolls for zoom; thumb-ring touch holds middle mouse for Blender orbit; peace sign holds Shift+middle for pan; open palm only points to avoid accidental pan; thumb-pinky, fist, low-confidence hands, and no-hand release all buttons. The webcam tracker now exposes MediaPipe image landmarks, world landmarks, handedness, and handedness confidence so gesture distances can use world-space geometry when available. The provider reports the actual mouse position back into Forge's cursor stream, and `--gesture-debug` now prints the active mode plus detected thumb touches and extended fingers. Automated Phase 0–3 runner passes; live client launches with MediaPipe + `--gestures`.
 **Do:** live tune inner-area percentage, smoothing, jitter threshold, and touch/scroll sensitivity if needed.
 **Verify:** real mouse follows the hand smoothly with <100 ms perceived latency; pointing/moving alone never clicks or navigates.
 
@@ -474,8 +450,7 @@ class PartRegistry:
 **Files:** `client/gestures/hand_mouse.py`, `client/companion_runtime.py`, `client/companion_app.py`.
 **Done:** `--gestures` switches the hand provider into handTrack-style mouse mode; runtime just streams the cursor and executes tools, while the provider drives native middle-drag / wheel / Shift+middle gestures with a short consecutive-frame guard before drag modes. Live Phase 0–3 socket/addon checks pass after hot-reloading the current addon.
 **Do:** live tune mouse gesture mappings in Blender GUI.
-**Verify:** thumb-index touch/release clicks, thumb-index hold/move left-drags, thumb-ring drag orbits, thumb-middle vertical motion zooms, open-palm drag pans, thumb-pinky/fist releases — responsive (<150 ms), smooth, no mesh changes.
->>>>>>> Stashed changes
+**Verify:** thumb-index touch/release clicks, thumb-index hold/move left-drags, thumb-ring drag orbits, thumb-middle vertical motion zooms, peace-sign drag pans, thumb-pinky/fist releases — responsive (<150 ms), smooth, no mesh changes.
 
 #### Step 12 — Local persistence
 **Goal:** save/reopen a build locally.
