@@ -57,7 +57,7 @@ PANEL_W = 380  # sidebar width in points
 HEADER_H = 50
 AGENT_H = 70
 WEBCAM_H = int(PANEL_W * 9 / 16)  # ≈ 213px for 16:9 aspect ratio
-CALIB_H = 28
+CALIB_H = 120
 BUTTON_H = 44
 DEBUG_H = 150
 LOG_BOTTOM = BUTTON_H + DEBUG_H + 4  # y of conversation log bottom edge
@@ -97,6 +97,15 @@ def _make_label(frame, text: str, *, font_size: float = 12.0, bold: bool = False
     label.setFont_(font)
     if color is not None:
         label.setTextColor_(color)
+    return label
+
+
+def _make_multiline_label(frame, text: str, *, font_size: float = 11.0, bold: bool = False, color=None):
+    label = _make_label(frame, text, font_size=font_size, bold=bold, color=color)
+    label.setLineBreakMode_(AppKit.NSLineBreakByWordWrapping)
+    label.setUsesSingleLineMode_(False)
+    if hasattr(label, "setMaximumNumberOfLines_"):
+        label.setMaximumNumberOfLines_(0)
     return label
 
 
@@ -215,6 +224,7 @@ class CompanionWindowController:
         self.tool_label = None
         self.webcam_view = None
         self.calibration_label = None
+        self.calibration_help_label = None
         self.log_scroll = None
         self.log_text = None
         self.mute_button = None
@@ -304,9 +314,14 @@ class CompanionWindowController:
         except Exception as exc:
             self.state.set_calibration_state("uncalibrated", f"Blender unavailable: {exc}")
             return
+        self._send_calibration_overlay("show_calibration_guides", {"duration": 45.0})
         ok, msg = self.provider.calibrate_viewport_anchors(
             region["width"], region["height"], announce=self._calibration_announce
         )
+        if ok:
+            self._send_calibration_overlay("show_calibration_complete", {"duration": 1.6})
+        else:
+            self._send_calibration_overlay("clear_calibration_guides", {})
         self.state.set_calibration_state("calibrated" if ok else "uncalibrated", msg)
         self.state.record_local_event(
             request_id=self.state.session_id,
@@ -443,15 +458,26 @@ class CompanionWindowController:
         self.webcam_view.setImageScaling_(AppKit.NSImageScaleAxesIndependently)
         content.addSubview_(self.webcam_view)
 
-        # --- 4. Calibration strip (28px) ---
+        # --- 4. Calibration guide ---
         calib_y = webcam_y - CALIB_H
         self.calibration_label = _make_label(
-            AppKit.NSMakeRect(pad, calib_y + 6, PANEL_W - pad * 2, 18),
+            AppKit.NSMakeRect(pad, calib_y + CALIB_H - 24, PANEL_W - pad * 2, 18),
             "Calibration: uncalibrated",
             font_size=10.0,
             color=AppKit.NSColor.secondaryLabelColor(),
         )
         content.addSubview_(self.calibration_label)
+
+        self.calibration_help_label = _make_multiline_label(
+            AppKit.NSMakeRect(pad, calib_y + 10, PANEL_W - pad * 2, CALIB_H - 38),
+            "Step 3: click Calibrate, then move the yellow dot to the Blender 3D viewport corners.\n"
+            "1. Hold on the viewport top-left corner.\n"
+            "2. Hold on the viewport bottom-right corner.\n"
+            "Do not point at the object until calibration is done.",
+            font_size=10.5,
+            color=AppKit.NSColor.secondaryLabelColor(),
+        )
+        content.addSubview_(self.calibration_help_label)
 
         mid_sep = AppKit.NSBox.alloc().initWithFrame_(AppKit.NSMakeRect(0, calib_y - 2, PANEL_W, 1))
         mid_sep.setBoxType_(AppKit.NSBoxSeparator)
@@ -557,6 +583,17 @@ class CompanionWindowController:
 
     def _calibration_announce(self, message: str) -> None:
         self.state.set_calibration_state("uncalibrated", message)
+
+    def _send_calibration_overlay(self, command: str, params: dict) -> None:
+        try:
+            self.bridge.send_command(command, params)
+        except Exception as exc:
+            self.state.record_local_event(
+                request_id=self.state.session_id,
+                event="calibration_overlay",
+                status="error",
+                summary=f"{command}: {exc}",
+            )
 
 
 def _make_small_button(title: str, frame) -> AppKit.NSButton:

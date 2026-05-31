@@ -66,6 +66,15 @@ check("pick result carries world_bounding_box", "world_bounding_box" in hit_res)
 miss = srv.execute_command({"type": "pick_object_at", "params": {"region_x": 2, "region_y": 2}})
 check("pick at empty corner -> hit:false", miss.get("result", {}).get("hit") is False)
 
+r = srv.execute_command({"type": "show_calibration_guides", "params": {"duration": 1.0}})
+check("show_calibration_guides -> success", r.get("status") == "success")
+
+r = srv.execute_command({"type": "show_calibration_complete", "params": {"duration": 0.5}})
+check("show_calibration_complete -> success", r.get("status") == "success")
+
+r = srv.execute_command({"type": "clear_calibration_guides"})
+check("clear_calibration_guides -> success", r.get("status") == "success")
+
 r = srv.execute_command({"type": "no_such_command"})
 check("unknown command -> error envelope", r.get("status") == "error")
 

@@ -173,6 +173,7 @@ class CompanionRuntime:
                         bridge=self.bridge,
                         sender=sender,
                         event_callback=self._executor_event_callback,
+                        region_point_provider=self.provider.region_point,
                     )
                     tasks = [
                         asyncio.create_task(self._mic_sender(sender)),

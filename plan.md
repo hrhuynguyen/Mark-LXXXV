@@ -61,7 +61,17 @@ Three processes, all of which already exist in some form across the two referenc
 ### Key topology insight — the client is the bridge to Blender
 Because Blender is **local** (behind the user's NAT), the cloud agent cannot reach it directly. So we reuse Wand's pattern exactly: **the cloud `blender_agent`'s remote tools forward a `tool_call` over the WebSocket to the local client; the client translates each into a JSON command on `localhost:9876`** (BlenderMCP's socket protocol). Blender replaces the Playwright browser as "the local resource the client owns."
 
-This means we **reuse BlenderMCP's addon + wire protocol directly from Wand's client** and **drop BlenderMCP's FastMCP server layer** (`src/blender_mcp/server.py`) — its `BlenderConnection.send_command` / `receive_full_response` logic is lifted into the client's executor. (The standalone MCP server can still be kept for text-only/testing.)
+This means the Gemini Live app **reuses BlenderMCP's addon + wire protocol directly from Wand's client**: `BlenderConnection.send_command` / `receive_full_response` is lifted into the client's executor. We also keep a **standalone MCP bridge** (`server/mcp_blender_bridge.py`, `forge-mcp`) that follows BlenderMCP's `FastMCP tool → BlenderConnection → JSON/TCP → addon handler` pattern for MCP clients and text-only bridge testing.
+
+Optional MCP path for external MCP clients / direct bridge testing:
+
+```text
+MCP client (Claude/Cursor/etc.)
+  → server/mcp_blender_bridge.py (`forge-mcp`, FastMCP)
+  → client.blender_bridge.BlenderConnection
+  → localhost:9876 Forge addon
+  → bpy on Blender main thread
+```
 
 ### No browser — what's dropped vs kept
 The web browser is removed entirely. **Dropped:** `browser_agent`, Playwright/Chromium, the CDP screencast, and all DOM actions (`navigate`, page `click`/`scroll`). **Kept** (none of it is browser-specific — it's general spatial/vision/voice infra): MediaPipe tracking, the homography cursor mapper + calibration, the transparent overlay, mic/speaker audio I/O + barge-in, Gemini Live + ADK orchestration, the audio gate, auto-reconnect, and the remote-tool bridge.
@@ -221,6 +231,7 @@ Wand's tracker uses only landmark 8 (index tip). Extend it to the full 21-landma
 ### Reuse from BlenderMCP (`blender-mcp.md`)
 - `addon.py`: socket server, `bpy.app.timers.register` main-thread dispatch, `execute_code`, `get_scene_info`, `get_object_info`, `_get_aabb`, `get_viewport_screenshot`, Hyper3D/Hunyuan/Sketchfab/Poly Haven handlers, UI panel.
 - `BlenderConnection.send_command` / `receive_full_response` socket logic (lifted into the client).
+- `src/blender_mcp/server.py` pattern for standalone MCP tools: `FastMCP` server, persistent Blender connection, thin tool stubs, screenshot-as-image, and an `asset_creation_strategy` prompt. Forge adapts this in `server/mcp_blender_bridge.py` and reuses the same socket bridge instead of duplicating Blender logic.
 
 ### Build new
 1. **Client→Blender socket bridge** inside `local_executor` (localhost:9876).
@@ -347,8 +358,8 @@ forge/
 
 #### [x] Step 1 — Client → Blender socket round-trip (Spike S1) ✅ DONE
 **Goal:** the client can drive the live Blender scene.
-**Files:** `client/blender_bridge.py` (done), `tests/test_blender_bridge.py` (mock-server unit tests), `scripts/{spike_cube.py, run_spike_headless.py, _spike_blender_server.py}`.
-**Done:** lifted `BlenderConnection` into `client/blender_bridge.py` (typed `BlenderError`, context manager, env-driven host/port, 180 s timeout, no-framing receive-until-valid-JSON per CONTRACTS §3). Verified two ways: (a) `pytest` against a mock server incl. a fragmented reply (4 passed); (b) **real-`bpy` round-trip** via `run_spike_headless.py` → launches headless Blender 5.1.2, the bridge sends `execute_code`, a cube is created (`added: 1`), returns `{"executed": true, ...}`. The in-GUI cube (`scripts/spike_cube.py` + "Connect" panel) lands with the persistent addon in Step 2.
+**Files:** `client/blender_bridge.py` (done), `server/mcp_blender_bridge.py` (optional MCP bridge), `tests/{test_blender_bridge.py,test_mcp_blender_bridge.py}` (mock-server/unit tests), `scripts/{spike_cube.py, run_spike_headless.py, _spike_blender_server.py}`.
+**Done:** lifted `BlenderConnection` into `client/blender_bridge.py` (typed `BlenderError`, context manager, env-driven host/port, 180 s timeout, no-framing receive-until-valid-JSON per CONTRACTS §3). Added `server/mcp_blender_bridge.py` as the BlenderMCP-style standalone `FastMCP` bridge (`forge-mcp`) with persistent connection, thin tools (`get_scene_info`, `get_object_info`, `execute_blender_code`, `pick_object_at`, `get_view_geometry`, `frame_object`, `get_viewport_screenshot`), and a procedural-first `asset_creation_strategy` prompt. Verified two ways: (a) `pytest` against a mock server incl. a fragmented reply plus MCP bridge helper tests; (b) **real-`bpy` round-trip** via `run_spike_headless.py` → launches headless Blender 5.1.2, the bridge sends `execute_code`, a cube is created (`added: 1`), returns `{"executed": true, ...}`. The in-GUI cube (`scripts/spike_cube.py` + "Connect" panel) lands with the persistent addon in Step 2.
 **Do:** lift BlenderMCP's `BlenderConnection.send_command` / `receive_full_response` into `blender_bridge.py`. Click "Connect" in Blender's panel (starts the socket server on 9876). Run a script that sends one command:
 ```python
 # scripts/spike_cube.py
@@ -383,7 +394,7 @@ def get_view_geometry(self):
 **Files:** `client/cursor/{types,displays,webcam_tracker,mapper,provider,ui_overlay}.py` (lifted ~verbatim from Wand), `addon/forge_addon.py` (`get_view_geometry`, `pick_object_at` radius), `scripts/spike_pick.py`, `tests/test_screen_to_region.py`, `tests/test_inner_area_map.py`.
 **Design note — what finally worked (after several pivots):** the cv2 4-corner *homography* calibration was fragile — one bad ring sample warped the whole transform and pinned the dot to a screen corner (0% picks). Replaced it (idea from **small-cactus/handTrack**, MIT) with an **absolute linear inner-area map**: the central `inner_area_percent` (0.7) of the camera frame maps linearly to the full screen — it cannot collapse and needs no ring calibration. Mapping chain: **hand-norm → screen** (linear inner-area, drives the visible dot) **→ region px** (`ScreenToRegionAffine`, fit from the user pointing at the viewport's TL + BR corners — empirical, so no macOS window-geometry/HiDPI guessing). Two more fixes were decisive: (1) **track the index fingertip (landmark 8)** not the palm — the palm barely translates when you point by rotating the wrist, starving the mapping of range; the fingertip swings widely. (2) **radius "fatten-the-finger" pick** in `pick_object_at` (raycast the center px, then rings out to 80px, nearest hit) so small jitter still selects. The spike warns if the calibration spread is too small (hand didn't move enough).
 **Auto-verified (14 tests):** inner-area map (center→center, inner-edges→corners, beyond→clamped); `ScreenToRegionAffine` reproduces region corners/center + clamps + rejects degenerate anchors; 2-corner anchoring captures both without blasting through; addon registers + headless raycast hits the Cube (incl. radius corner-miss).
-**Confirmed on webcam:** `python scripts/spike_pick.py --target Cube` → rolling accuracy ≥90% once the calibration spread is healthy (move the hand over a big range between corners). Radius pick is now baked into the addon (reload Blender to pick it up for the Step 5 agent).
+**Confirmed on webcam:** `python scripts/spike_pick.py --target Cube` → rolling accuracy ≥90% once the calibration spread is healthy (move the yellow dot between the Blender viewport corners, not the object). User retest reached consistent 100% Cube picking with spread around 1166×698px. The app sidebar now includes Step-3 calibration instructions, and `calibrate_viewport_anchors(...)` rejects tiny object-sized spreads (<500×300px) with a clear retry message. During app calibration the Blender addon draws cyan viewport-corner guide spots and pulses them when calibration completes. Radius pick is now baked into the addon (reload Blender to pick it up for the Step 5 agent).
 
 > **Gate:** Steps 1–3 prove the riskiest seam. Do not build features until S3's 90% holds.
 
@@ -398,13 +409,15 @@ def get_view_geometry(self):
 **Auto-verified (23 tests):** executor forwards/dedups/error-wraps; launcher attach-vs-spawn + missing-binary; client + server import clean; zero browser refs in `client/`.
 **Pending (needs you):** Terminal A `uv run uvicorn server.server:app`; Terminal B `uv run python -m client.companion_app` → Blender opens & connects with no clicks, sidebar shows the live log + webcam preview, the overlay dot tracks your hand, and the server logs a growing `mic=/cursor=` tally. No browser anywhere.
 
-#### [ ] Step 5 — `blender_agent` + remote tool bridge
+#### [x] Step 5 — `blender_agent` + remote tool bridge ✅ DONE
 **Goal:** the cloud/Local ADK agent executes Blender tools via the client.
 **Files:** `server/agents/blender_agent.py`, `server/tools/remote_blender.py`, `server/agents/concierge.py`, `client/local_executor.py`.
+**Done:** replaced the Step-4 WebSocket sink with the real Gemini Live/ADK server; wired `concierge` → `blender_agent` and `search_agent`; implemented the server `SessionBridge` (`tool_call`/`tool_result` RPC), remote Blender tools (`execute_blender_code`, `pick_object_at`, `get_object_info`, `get_viewport_screenshot`, `frame_object`), audio gate / resettable queue / trace / cursor infra, and the client-side Seam-1→Seam-2 adaptations (`execute_blender_code`→`execute_code`, cursor injection for `pick_object_at`, temp filepath for screenshots). Added addon handlers for `get_viewport_screenshot` and `frame_object`.
+**Auto-verified (28 tests):** server imports + health, agent wiring, session bridge round-trip, local executor tool mapping/cursor injection/errors, existing Blender bridge/addon/cursor/launcher tests. `ruff check` passes.
 **Do:** rename `browser_agent` → `blender_agent`; replace its tools with `execute_blender_code`, `pick_object_at`, `get_object_info`, `get_viewport_screenshot`, `frame_object`. Each is a thin RPC stub (reuse Wand's `_call`) that the client maps to a `blender_bridge.send_command`. Update the concierge instruction to delegate modeling/pointing to `blender_agent`.
-**Verify:** say "add a cube" → it appears; "what's at my finger?" → screenshot + `pick_object_at` returns the right name and the agent describes it.
+**Verify:** ⏳ live mic/camera/Gemini/Blender GUI smoke remains manual: say "add a cube" → it appears; "what's at my finger?" → screenshot + `pick_object_at` returns the right name and the agent describes it.
 
-#### [ ] Step 6 — Part Registry
+#### [x] Step 6 — Part Registry ✅ DONE
 **Goal:** every created object is a tracked, JSON-serializable part.
 **Files:** `server/runtime/part_registry.py`.
 **Do:** implement `PartEntry` (§4) + a per-session `PartRegistry` (add/get/update/children/to_json/from_json). **Store names + params only — never live `bpy` refs.** `build_*` tools register entries; `pick_object_at` results are looked up here.
@@ -418,16 +431,24 @@ class PartRegistry:
     def add(self, e): self.parts[e.name] = e
     def to_json(self): return {n: asdict(e) for n, e in self.parts.items()}
 ```
-**Verify:** after a build, `registry.to_json()` round-trips through `json.dumps`/`loads` with no errors and matches the scene's object names.
+**Done:** implemented immutable `PartEntry`, mutable per-build `PartRegistry`, JSON validation, add/get/update/children/from_json/to_json helpers, Build-Spec registration hooks, session-scoped registry storage, scene-name reporting, and `pick_object_at` registry enrichment. Session cleanup now clears the registry.
 
-#### [ ] Step 7 — Spec Agent + Build-Spec executor
+**Auto-verified (32 tests):** registry JSON round-trip through `json.dumps`/`loads`, child lookup, scene-name report, session isolation, non-JSON param rejection, `pick_object_at` enrichment, full pytest suite, and `ruff check` all pass.
+
+**Verify:** Step 7 build executor should call `register_tool_result(...)` after each generated object; then `registry.scene_name_report(...)` should show no registered objects missing from Blender.
+
+#### [x] Step 7 — Spec Agent + Build-Spec executor ✅ DONE
 **Goal:** terse prompt → detailed, decomposed assembly.
 **Files:** `server/agents/spec_agent.py` (new), `server/agents/blender_agent.py` (executor + generator library).
 **Do:**
 - `spec_agent` = `gemini-2.5-flash`/`pro`, `AgentTool`, returns the **Build Spec** JSON (§5a). Instruction: target ~8–15 parts (medium LOD), ground in `search_agent` when the object is real, emit names/generators/params/placement/parent/materials.
 - In `blender_agent`, write a small **generator library** (`build_cylinder`, `build_engine_cluster`, `build_grid_fin`, `build_landing_leg`, …) and an **executor** that walks `spec.parts`, calls the matching generator, places via AABB, parents under a Collection, and registers each part.
 - Concierge: on a build intent → call `spec_agent` → speak one-sentence summary → run executor immediately (no blocking questions).
-**Verify:** "Build a Falcon 9" → one spoken summary, then named `stage1_body / octaweb / grid_fin_* / landing_leg_* / interstage / stage2_body / fairing` (~8–15 parts) appear, correctly stacked (no clipping), all in the registry.
+**Done:** added `spec_agent` as a text-model Build-Spec producer with `search_agent` grounding, wired it as an `AgentTool` into both concierge and `blender_agent`, and added deterministic `build_from_spec` / `build_named_part` executor tools. The executor validates specs, expands counted editable parts (`grid_fin_1..4`, `landing_leg_1..4`), emits procedural Blender generator code (`cylinder`, `cone`, `cube`, `engine_cluster`, `grid_fin`, `landing_leg`), parents objects under a build collection/root, queries `get_object_info`, and registers every part in the Step-6 registry.
+
+**Auto-verified (37 tests):** Falcon 9-style spec expands to 13 named objects, generated code carries safe JSON config, unsupported generators are rejected, fake executor run registers every produced object, server/agent graph imports, full pytest suite, and `ruff check` all pass.
+
+**Verify:** ⏳ live mic/camera/Gemini/Blender GUI smoke remains manual: say "Build a Falcon 9" → one spoken summary, then named `stage1_body / octaweb / grid_fin_* / landing_leg_* / interstage / stage2_body / fairing` appear, correctly stacked, all in the registry.
 
 ---
 

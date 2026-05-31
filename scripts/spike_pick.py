@@ -134,12 +134,12 @@ def main() -> int:
             f"[geom] anchors: TL screen=({s2r.ax:.0f},{s2r.ay:.0f})  "
             f"BR screen=({s2r.bx:.0f},{s2r.by:.0f})  spread=({spread_x:.0f},{spread_y:.0f})px"
         )
-        if spread_x < 300 or spread_y < 200:
+        if spread_x < 500 or spread_y < 300:
             print(
                 "[WARN] Tiny calibration spread — your hand barely moved between the two\n"
-                "       corners, so picking will be hyper-sensitive and miss. RE-RUN and move\n"
-                "       your hand/finger over a MUCH bigger range between the corners\n"
-                "       (try --landmark 8 and point by swinging your index finger)."
+                "       viewport corners, so picking will be hyper-sensitive and miss. RE-RUN\n"
+                "       and move the yellow dot between the Blender viewport's TOP-LEFT and\n"
+                "       BOTTOM-RIGHT corners. Do not point at the object until anchoring is done."
             )
 
         target_center = _project_center(conn, args.debug) if args.debug else None

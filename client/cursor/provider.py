@@ -266,6 +266,8 @@ class HandCursorProvider:
         dwell_s: float = 0.6,
         stability_px: float = 14.0,
         rearm_px: float = 120.0,
+        min_anchor_spread_x: float = 500.0,
+        min_anchor_spread_y: float = 300.0,
         min_samples: int = 5,
         target_timeout_s: float = 30.0,
         poll_dt_s: float = 0.02,
@@ -283,10 +285,12 @@ class HandCursorProvider:
         missing_notice_deadline = 0.0
         last_capture: Optional[Tuple[float, float]] = None
 
-        say("[anchor] Now park the dot on two corners of the Blender 3D VIEWPORT itself.")
+        say("[anchor] Step 3 calibration: teach Forge where the Blender viewport is.")
+        say("[anchor] Move the YELLOW DOT to viewport corners, not to the object.")
+        say("[anchor] After this finishes, point at the object you want to pick.")
 
         for idx, (label, _region) in enumerate(corners, start=1):
-            say(f"[anchor] {idx}/2 — put the dot on the {label} corner of the viewport and hold.")
+            say(f"[anchor] {idx}/2 — put the yellow dot on the {label} corner of the 3D viewport and hold.")
             window: deque = deque()  # (ts, screen_x, screen_y)
             deadline = time.time() + target_timeout_s
             captured = False
@@ -313,7 +317,7 @@ class HandCursorProvider:
                         armed = True
                     else:
                         if now >= armed_notice_deadline:
-                            say("[anchor]   …move the dot to the other corner.")
+                            say("[anchor]   …move the yellow dot to the other viewport corner.")
                             armed_notice_deadline = now + 1.5
                         window.clear()
                         time.sleep(poll_dt_s)
@@ -343,9 +347,18 @@ class HandCursorProvider:
         )
         if s2r is None:
             return False, "viewport anchors too close together — try again, corners further apart."
+        spread_x = abs(s2r.bx - s2r.ax)
+        spread_y = abs(s2r.by - s2r.ay)
+        if spread_x < min_anchor_spread_x or spread_y < min_anchor_spread_y:
+            return (
+                False,
+                "viewport calibration spread too small "
+                f"({spread_x:.0f}x{spread_y:.0f}px). Move the yellow dot between the "
+                "top-left and bottom-right corners of the Blender 3D viewport, not the object.",
+            )
         self.screen_to_region = s2r
-        say("[anchor] Done — the dot now maps onto the viewport.")
-        return True, "viewport anchored"
+        say(f"[anchor] Done — the dot now maps onto the viewport. spread=({spread_x:.0f},{spread_y:.0f})px")
+        return True, f"viewport anchored spread=({spread_x:.0f},{spread_y:.0f})px"
 
     def region_point(self) -> Optional[Tuple[float, float]]:
         """Current cursor mapped to Blender region px (drives the dot), or None."""
