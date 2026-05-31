@@ -192,6 +192,31 @@ async def ws(websocket: WebSocket, user_id: str, session_id: str) -> None:
                     await handle_tool_result(user_id=user_id, session_id=session_id, payload=payload)
                     continue
 
+                # Typed-text input path (voice-free testing). The text console
+                # sends {"type": "user_text", "text": ...}; feed it to the live
+                # session as a user content turn so the agent acts on it exactly
+                # as it would on a spoken turn.
+                if payload.get("type") == "user_text":
+                    text_in = str(payload.get("text", "") or "").strip()
+                    if not text_in:
+                        continue
+                    _info(
+                        "[upstream.text] "
+                        f"user={user_id} session={session_id} text={text_in!r}"
+                    )
+                    await emit_server_trace(
+                        user_id=user_id,
+                        session_id=session_id,
+                        request_id=session_id,
+                        event="user_spoke",
+                        status="ok",
+                        summary=text_in,
+                    )
+                    queue.send_content(
+                        types.Content(role="user", parts=[types.Part(text=text_in)])
+                    )
+                    continue
+
                 client_trace = parse_trace_payload(
                     payload,
                     expected_type="client_trace",

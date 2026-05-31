@@ -56,6 +56,10 @@ Reused verbatim from Wand (`app/runtime/session_bridge.py`, `client/companion_ru
 
 // client trace (optional telemetry/UI) — event ∈ a fixed allow-list (Wand)
 {"type": "client_trace", "source": "client", "event": "tool_result_received", "...": "..."}
+
+// typed text input (voice-free testing). Server feeds it to Gemini Live as a
+// user content turn — same effect as a spoken turn. Sent by scripts/forge_text_console.py.
+{"type": "user_text", "text": "add a red cube"}
 ```
 
 ### 2.3 Server → Client (text)

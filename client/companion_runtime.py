@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from collections import deque
 from typing import Optional
 
@@ -42,6 +43,7 @@ DTYPE = "int16"
 CHUNK_MS = 100
 CHUNK_SAMPLES = int(IN_RATE * CHUNK_MS / 1000)
 RECONNECT_DELAY_S = 2.0
+PLAYBACK_MIC_SUPPRESS_TAIL_S = 0.45
 CLIENT_TRACE_EVENTS = {
     "camera_started",
     "session_connected",
@@ -82,6 +84,7 @@ class CompanionRuntime:
         self._reconnect_async: Optional[asyncio.Event] = None
         self._mic_queue: Optional[asyncio.Queue[bytes]] = None
         self._audio_gate_open = True
+        self._playback_mic_suppress_until = 0.0
         self._client_trace_lock = threading.Lock()
         self._pending_client_traces: deque[dict[str, object]] = deque(maxlen=CLIENT_TRACE_MAX_BACKLOG)
         self.state.set_local_trace_listener(self._queue_client_trace)
@@ -295,6 +298,8 @@ class CompanionRuntime:
                     continue
                 if not self._audio_gate_open:
                     continue
+                if time.monotonic() < self._playback_mic_suppress_until:
+                    continue
                 await sender.send_bytes("mic_chunk", chunk)
         self._mic_queue = None
 
@@ -311,6 +316,11 @@ class CompanionRuntime:
         _playback_buf = bytearray()
 
         def _playback_push(data: bytes) -> None:
+            duration_s = len(data) / float(OUT_RATE * 2)
+            self._playback_mic_suppress_until = max(
+                self._playback_mic_suppress_until,
+                time.monotonic() + duration_s + PLAYBACK_MIC_SUPPRESS_TAIL_S,
+            )
             with _playback_lock:
                 _playback_buf.extend(data)
 
