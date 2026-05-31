@@ -248,10 +248,10 @@ Wand's tracker uses only landmark 8 (index tip). Extend it to the full 21-landma
 - `concierge` + `spec_agent` (terse prompt → Build Spec) + `blender_agent`; spec drives a generator per part → **named-part hierarchy**; parts registered. One-line spoken summary, build immediately. On-demand screenshots feed the model. *Exit:* "Build a Falcon 9" → spoken summary, then named `stage1_body/octaweb/grid_fin_*/landing_leg_*` (~8–15 parts) appear in Blender.
 
 ### Phase 2 — Point-and-edit
-- Cursor overlay on Blender; `pick_object_at` wired to "what's this?" and registry-driven edits. *Exit:* point at a leg + "scale these up 20%" scales *only* the legs and updates the registry.
+- Cursor/selection context in Blender; selected-object Gemini Live info wired into the current terminal harness, with `pick_object_at` still planned for true fingertip raycast. *Exit:* select a leg and Forge explains what it likely is; point at a leg + "scale these up 20%" scales *only* the legs and updates the registry.
 
 ### Phase 3 — Gesture navigation
-- 21-landmark `GestureRecognizer`; pinch-orbit / two-hand-zoom / peace-sign pan via `RegionView3D`. *Exit:* hands-only orbit/zoom/pan feels responsive (<150 ms).
+- 21-landmark hand mouse controller; thumb-ring orbit / thumb-middle zoom / peace-sign pan through Blender's native mouse bindings. *Current test path:* `scripts/run_prompt_gesture_test.py` lets the user type a Text2Blender prompt while hand gestures control Blender. *Exit:* hands-only orbit/zoom/pan feels responsive (<150 ms).
 
 - **Local persistence** lands here: save/load `.blend` + registry JSON to disk (`bpy.ops.wm.save_as_mainfile`); registry kept JSON-serializable. *Exit:* "save this build" / "reopen the Falcon 9" round-trips locally.
 
@@ -411,12 +411,13 @@ class PartRegistry:
 
 #### Step 7 — Spec Agent + Text2Blender Build-Spec executor
 **Goal:** terse prompt → detailed Build Spec → Text2Blender creates the object in Blender.
-**Files:** `server/agents/spec_agent.py` (new), `server/build/executor.py`, `server/build/text2blender_adapter.py`, local Text2Blender checkout at `/Users/dothanhtam91/Desktop/PROJECT /Text2Blender`.
+**Files:** `server/agents/spec_agent.py` (new), `server/build/executor.py`, `server/build/text2blender_adapter.py`, `scripts/run_prompt_gesture_test.py`, local Text2Blender checkout at `/Users/dothanhtam91/Desktop/PROJECT /Text2Blender`.
 **Do:**
 - `spec_agent` = `gemini-2.5-flash`/`pro`, `AgentTool`, returns the **Build Spec** JSON (§5a). Instruction: target ~8–15 parts (medium LOD), ground in `search_agent` when the object is real, emit names/generators/params/placement/parent/materials.
 - In `server/build/executor.py`, convert the Build Spec into a concise Text2Blender prompt and run the local Text2Blender CLI from `/Users/dothanhtam91/Desktop/PROJECT /Text2Blender` using its standalone `.venv/bin/text2blender --prompt ...` flow. Register the resulting root object as `kind:"text2blender"`. Set `FORGE_USE_TEXT2BLENDER=0` or `spec["generator"]="procedural"` to use the older Forge procedural snippets.
+- Until the full Forge server/client stack is wired, use `scripts/run_prompt_gesture_test.py` for live testing: it starts the hand gesture mouse loop and reads object prompts from the terminal, then calls Text2Blender's standalone CLI.
 - Concierge: on a build intent → call `spec_agent` → speak one-sentence summary → run executor immediately (no blocking questions).
-**Verify:** "Build a Falcon 9" → one spoken summary, then Text2Blender creates the object in Blender through the same CLI used by the standalone Text2Blender project; the registry records the Text2Blender source path, CLI command, generated prompt, and root object entry.
+**Verify:** `python scripts/run_prompt_gesture_test.py` → type "build a Falcon 9" → Text2Blender creates the object in Blender through the same CLI used by the standalone Text2Blender project, while hand gestures continue to move/orbit/zoom/pan Blender.
 
 ---
 
@@ -424,9 +425,10 @@ class PartRegistry:
 
 #### Step 8 — Contextual info on point
 **Goal:** point at a part → the agent tells you what it is.
-**Files:** `server/agents/blender_agent.py`, `client/cursor/ui_overlay.py` (optional label).
-**Do:** wire "what's this?" → resolve cursor (client-side, like Wand "here") → `pick_object_at` → registry lookup + `get_object_info` → spoken answer; optionally render a cursor-anchored text label.
-**Verify:** point at a leg + "what is this?" → "Landing leg 2, ~8 m, part of stage-1."
+**Files:** `server/agents/blender_agent.py`, `server/agents/part_info_agent.py`, `server/tools/blender_selection.py`, `client/blender_bridge.py`, `scripts/run_prompt_gesture_test.py`, `client/cursor/ui_overlay.py` (optional label).
+**Done:** current live harness watches Blender's active selected object, fetches its metadata through the Text2Blender/BlenderMCP socket, and asks Gemini Live (`response_modalities=["TEXT"]`) for a concise part explanation, falling back to a normal Gemini text call if the Live text model is unavailable for the current API key/model. Gesture status logs stay quiet unless `--gesture-debug` is used; `--speak-info` additionally reads selected-part explanations aloud through macOS `say`.
+**Do:** wire "what's this?" → resolve cursor (client-side, like Wand "here") → `pick_object_at` → registry lookup + `get_object_info` → spoken answer; optionally render a cursor-anchored text label. Keep the selected-object monitor as the fallback path until the Forge addon has `pick_object_at`.
+**Verify:** run `python scripts/run_prompt_gesture_test.py --speak-info`, select a leg/object in Blender → Gemini Live explains the selected part in the terminal and macOS speaks it aloud; `/info` repeats the explanation manually. Later: point at a leg + "what is this?" → "Landing leg 2, ~8 m, part of stage-1."
 
 #### Step 9 — Registry-driven edits
 **Goal:** edits hit only the targeted part.
@@ -441,14 +443,14 @@ class PartRegistry:
 #### [~] Step 10 — handTrack-style hand mouse controller  *(code done + automated verified; live feel pending webcam tuning)*
 **Goal:** control/monitor the real mouse from hand gestures, following `small-cactus/handTrack`'s interaction model.
 **Files:** `client/cursor/webcam_tracker.py` (emit full 21 landmarks), `client/gestures/hand_mouse.py`, `client/companion_app.py`.
-**Done:** added `HandMouseCursorProvider` and `HandMouseController`: ring-finger MCP blended with palm center controls the real cursor through a centered inner camera area; thumb-index uses the original handTrack click model (`mouseDown` while touching, `mouseUp` on release, so tap=click and hold/move=drag); thumb-middle vertical motion scrolls for zoom; thumb-ring touch holds middle mouse for Blender orbit; peace sign holds Shift+middle for pan; open palm only points to avoid accidental pan; thumb-pinky, fist, low-confidence hands, and no-hand release all buttons. The webcam tracker now exposes MediaPipe image landmarks, world landmarks, handedness, and handedness confidence so gesture distances can use world-space geometry when available. The provider reports the actual mouse position back into Forge's cursor stream, and `--gesture-debug` now prints the active mode plus detected thumb touches and extended fingers. Automated Phase 0–3 runner passes; live client launches with MediaPipe + `--gestures`.
+**Done:** added `HandMouseCursorProvider` and `HandMouseController`: ring-finger MCP blended with palm center controls the real cursor through a centered inner camera area; thumb-index uses the original handTrack click model (`mouseDown` while touching, `mouseUp` on release, so tap=click and hold/move=drag); thumb-middle vertical motion scrolls for zoom; thumb-ring touch holds middle mouse for Blender orbit; peace sign holds Shift+middle for pan; open palm only points to avoid accidental pan; thumb-pinky, fist, low-confidence hands, and no-hand release all buttons. The webcam tracker now exposes MediaPipe image landmarks, world landmarks, handedness, and handedness confidence so gesture distances can use world-space geometry when available. The provider reports the actual mouse position back into Forge's cursor stream; gesture status lines are quiet by default and only print when the test/client is launched with `--gesture-debug`. Automated tests pass; the current live path is `scripts/run_prompt_gesture_test.py`.
 **Do:** live tune inner-area percentage, smoothing, jitter threshold, and touch/scroll sensitivity if needed.
 **Verify:** real mouse follows the hand smoothly with <100 ms perceived latency; pointing/moving alone never clicks or navigates.
 
 #### [~] Step 11 — Native Blender mouse navigation  *(code done + live socket verified; live hand feel pending Blender GUI)*
 **Goal:** hands-only camera control through Blender's native mouse bindings instead of direct camera RPCs.
-**Files:** `client/gestures/hand_mouse.py`, `client/companion_runtime.py`, `client/companion_app.py`.
-**Done:** `--gestures` switches the hand provider into handTrack-style mouse mode; runtime just streams the cursor and executes tools, while the provider drives native middle-drag / wheel / Shift+middle gestures with a short consecutive-frame guard before drag modes. Live Phase 0–3 socket/addon checks pass after hot-reloading the current addon.
+**Files:** `client/gestures/hand_mouse.py`, `scripts/run_prompt_gesture_test.py`, `client/companion_runtime.py`, `client/companion_app.py`.
+**Done:** `scripts/run_prompt_gesture_test.py` starts the hand provider in handTrack-style mouse mode while terminal prompts call Text2Blender. The provider drives native left-click/drag, middle-drag, wheel, and Shift+middle gestures with a short consecutive-frame guard before drag modes. `--gestures` remains the intended full-client flag once `client.companion_runtime` is wired.
 **Do:** live tune mouse gesture mappings in Blender GUI.
 **Verify:** thumb-index touch/release clicks, thumb-index hold/move left-drags, thumb-ring drag orbits, thumb-middle vertical motion zooms, peace-sign drag pans, thumb-pinky/fist releases — responsive (<150 ms), smooth, no mesh changes.
 
