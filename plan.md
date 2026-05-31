@@ -378,11 +378,12 @@ def get_view_geometry(self):
 ```
 **Verify:** from a spike script, call `pick_object_at` with a region pixel known to be over the cube → returns the cube's `name` + `world_bounding_box`; an empty pixel → `{"hit": false}`.
 
-#### [ ] Step 3 — Direct fingertip → region calibration (Spike S3)
+#### [~] Step 3 — Direct fingertip → region calibration (Spike S3)  *(code done + math verified; ≥90% gate needs your webcam)*
 **Goal:** pointing maps to the right region pixel without knowing Blender's OS window position.
-**Files:** `client/cursor/provider.py` (adapt `run_guided_calibration`), `client/cursor/mapper.py` (reused homography).
-**Do:** drive the 4 calibration targets to Blender's VIEW_3D region corners (from `get_view_geometry`), capture fingertip medians, fit the homography → `fingertip → region px`. Feed that into `pick_object_at`.
-**Verify:** after calibration, pointing at the cube selects it **≥90%** of attempts; the `ScreenDotOverlay` dot visually sits on the fingertip.
+**Files:** `client/cursor/{types,displays,webcam_tracker}.py` (lifted from Wand), `client/cursor/mapper.py` (`RegionMapper` + `region_corner_targets`), `client/cursor/provider.py` (`RegionCalibrator`), `scripts/spike_pick.py`, `tests/test_region_mapper.py`, `tests/test_region_calibration.py`.
+**Done:** built the fingertip→**region px** homography (same `cv2.getPerspectiveTransform` technique as Wand, but fit straight to Blender region pixels in **bottom-left origin** — so no OS window position needed; the camera y-down→region y-up flip is absorbed by the correspondences). Calibration is guided by **fingertip-stability dwell** (no on-screen target ring, since we don't know the window position): the user points at each visible viewport corner and holds still. **Auto-verified (13 tests):** homography reproduces interior points (±0.5 px), y-flip + clamping correct, and the full 4-corner calibration orchestration runs end-to-end with a fake tracker and reproduces each corner (±1 px). Tracker + model (`client/models/hand_landmarker.task`) load.
+**Pending (needs you, not self-verifiable):** run `python scripts/spike_pick.py --target Cube` with Blender open + addon Connected + webcam → confirm pointing selects the right object **≥90%**. The screen-space overlay dot is deferred (Forge maps to region, not screen; the cursor overlay is a Step 8 item).
+**Original do:** drive the 4 calibration targets to Blender's VIEW_3D region corners (from `get_view_geometry`), capture fingertip medians, fit the homography → `fingertip → region px`. Feed that into `pick_object_at`.
 
 > **Gate:** Steps 1–3 prove the riskiest seam. Do not build features until S3's 90% holds.
 
