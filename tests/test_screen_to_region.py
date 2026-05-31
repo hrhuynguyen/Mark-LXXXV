@@ -93,6 +93,19 @@ def test_anchoring_captures_two_corners():
     assert p.screen_to_region is not None
 
 
+def test_anchoring_rejects_tiny_viewport_spread():
+    tracker = FakeTracker([(0.45, 0.45), (0.56, 0.56)])
+    p = _provider(tracker)
+    ok, msg = p.calibrate_viewport_anchors(
+        WIDTH, HEIGHT, announce=tracker.on_announce,
+        dwell_s=0.15, min_samples=3, poll_dt_s=0.01, target_timeout_s=5.0,
+    )
+    assert not ok
+    assert "spread too small" in msg
+    assert "not the object" in msg
+    assert p.screen_to_region is None
+
+
 def test_anchoring_does_not_blast_through_when_still():
     tracker = FakeTracker([(0.5, 0.5)], advance=False)  # hand never moves
     p = _provider(tracker)
