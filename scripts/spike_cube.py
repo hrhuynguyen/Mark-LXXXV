@@ -8,6 +8,14 @@ Run:  python scripts/spike_cube.py
 Pass: a cube appears in the live Blender window and this prints {"executed": true, ...}.
 """
 
+from __future__ import annotations
+
+import pathlib
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
 from client.blender_bridge import BlenderConnection
 
 
