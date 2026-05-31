@@ -10,7 +10,6 @@ live testing the two working pieces together:
 from __future__ import annotations
 
 import argparse
-import subprocess
 import signal
 import sys
 import threading
@@ -67,9 +66,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--info-poll-seconds", type=float, default=1.0)
     parser.add_argument(
+        "--selection-hold-seconds",
+        type=float,
+        default=3.0,
+        help="Explain a selected object only after it remains selected this long.",
+    )
+    parser.add_argument(
         "--speak-info",
         action="store_true",
-        help="Also speak selected-part explanations through macOS say.",
+        help="Speak selected-part explanations with Gemini Live audio output.",
     )
     return parser
 
@@ -131,7 +136,7 @@ def _explain_selected_part(
     *,
     agent: GeminiLivePartInfoAgent,
     speak: bool,
-    label: str = "Gemini Live part info",
+    label: str = "Gemini part info",
 ) -> str | None:
     conn = BlenderConnection()
     try:
@@ -145,16 +150,22 @@ def _explain_selected_part(
 
     name = snapshot.get("name", "selected object")
     print(f"\nSelected: {name}")
-    print("Asking Gemini for part info...")
-    reply = agent.explain_part(snapshot)
-    if agent.live_available is False:
-        label = "Gemini part info"
-        print("Gemini Live text response unavailable here; using Gemini text fallback.")
+    if speak:
+        print("Asking Gemini Live to speak part info...")
+        try:
+            reply = agent.speak_part_live(snapshot)
+        except Exception as exc:
+            print(f"Gemini Live voice failed: {exc}")
+            print("Using Gemini text fallback in the terminal.")
+            reply = agent.explain_part_generate_from_snapshot(snapshot)
+        else:
+            print(f"Played Gemini Live voice audio ({agent.last_audio_bytes} bytes).")
+    else:
+        print("Asking Gemini for part info...")
+        reply = agent.explain_part_generate_from_snapshot(snapshot)
     print(f"\n{label}:")
     print(reply)
     print()
-    if speak:
-        _speak(reply)
     return str(name)
 
 
@@ -166,9 +177,12 @@ def _start_part_info_monitor(
 ) -> threading.Thread:
     agent = GeminiLivePartInfoAgent(model=args.part_info_model)
     poll_s = max(0.25, float(args.info_poll_seconds))
+    hold_s = max(0.0, float(args.selection_hold_seconds))
 
     def monitor() -> None:
-        last_name: str | None = None
+        candidate_name: str | None = None
+        candidate_since = 0.0
+        explained_name: str | None = None
         last_error: str | None = None
         while not stop_event.is_set():
             if busy_event.is_set():
@@ -191,31 +205,53 @@ def _start_part_info_monitor(
             last_error = None
             name = str(snapshot.get("name")) if snapshot else None
             if not name:
-                last_name = None
-                time.sleep(poll_s)
-                continue
-            if name == last_name:
+                candidate_name = None
+                explained_name = None
                 time.sleep(poll_s)
                 continue
 
-            last_name = name
-            print(f"\nSelected: {name}")
-            print("Asking Gemini for part info...")
+            now = time.monotonic()
+            if name != candidate_name:
+                candidate_name = name
+                candidate_since = now
+                print(f"\nSelected: {name} (hold for {hold_s:.1f}s for info)")
+                time.sleep(poll_s)
+                continue
+
+            if name == explained_name or now - candidate_since < hold_s:
+                time.sleep(poll_s)
+                continue
+
+            explained_name = name
+            if args.speak_info:
+                print(f"\n{name} held for {hold_s:.1f}s. Asking Gemini Live to speak part info...")
+            else:
+                print(f"\n{name} held for {hold_s:.1f}s. Asking Gemini for part info...")
             busy_event.set()
             try:
-                reply = agent.explain_part(snapshot)
-            except Exception as exc:
-                print(f"Gemini Live part info failed: {exc}")
-            else:
-                if agent.live_available is False:
-                    print("Gemini Live text response unavailable here; using Gemini text fallback.")
-                    print("\nGemini part info:")
+                if args.speak_info:
+                    reply = agent.speak_part_live(snapshot)
                 else:
-                    print("\nGemini Live part info:")
+                    reply = agent.explain_part_generate_from_snapshot(snapshot)
+            except Exception as exc:
+                print(f"Gemini part info failed: {exc}")
+                if args.speak_info:
+                    print("Using Gemini text fallback in the terminal.")
+                    try:
+                        reply = agent.explain_part_generate_from_snapshot(snapshot)
+                    except Exception as fallback_exc:
+                        print(f"Gemini text fallback failed: {fallback_exc}")
+                        reply = ""
+                    else:
+                        print("\nGemini part info:")
+                        print(reply)
+                        print()
+            else:
+                if args.speak_info:
+                    print(f"Played Gemini Live voice audio ({agent.last_audio_bytes} bytes).")
+                print("\nGemini part info:")
                 print(reply)
                 print()
-                if args.speak_info:
-                    _speak(reply)
             finally:
                 busy_event.clear()
             time.sleep(poll_s)
@@ -223,13 +259,6 @@ def _start_part_info_monitor(
     thread = threading.Thread(target=monitor, name="part-info-monitor", daemon=True)
     thread.start()
     return thread
-
-
-def _speak(text: str) -> None:
-    try:
-        subprocess.Popen(["say", text])
-    except Exception:
-        pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -272,11 +301,12 @@ def main(argv: list[str] | None = None) -> int:
                 print()
             else:
                 print("Part info monitor is running.")
-                print("Select an object in Blender to ask Gemini Live what it is.")
+                print(
+                    "Select an object in Blender and keep it selected for "
+                    f"{max(0.0, args.selection_hold_seconds):.1f}s to ask what it is."
+                )
                 print("Use /info to explain the current selection manually.")
                 print()
-        else:
-            info_agent = GeminiLivePartInfoAgent(model=args.part_info_model)
 
         if args.prompt:
             return _run_prompt(args.prompt, busy_event)
@@ -292,8 +322,13 @@ def main(argv: list[str] | None = None) -> int:
                 break
             if prompt == "/help":
                 print("Type an object prompt to generate in Blender.")
-                print("Select an object in Blender and type /info for Gemini Live part info.")
+                print(
+                    "Select an object in Blender and hold it selected for "
+                    f"{max(0.0, args.selection_hold_seconds):.1f}s for part info."
+                )
+                print("Type /info to explain the current selection immediately.")
                 print("Launch with --no-auto-info to disable automatic selection explanations.")
+                print("Launch with --speak-info for Gemini Live voice output.")
                 continue
             if prompt == "/info":
                 if info_agent is None:
