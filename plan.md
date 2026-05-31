@@ -337,7 +337,7 @@ forge/
 - [x] `uv venv && source .venv/bin/activate`; `uv pip install -e ".[dev]"` — all deps import (incl. `pyobjc`, `mediapipe`, `cv2`, `sounddevice`; dev `ruff`/`pytest`).
 - [x] `GOOGLE_API_KEY` present in `.env` and loads via `dotenv`; `.env` is git-ignored + untracked.
 - [x] Blender **5.1.2** (bundled Python 3.13) installed at `/Applications/Blender.app`; verified headless — `bpy` runs and `primitive_cube_add` works. ⚠️ 5.x is newer than BlenderMCP's addon target — bump `bl_info["blender"]` and sanity-check `scene.ray_cast` / `view3d_utils` signatures when lifting in Step 2.
-- [ ] Enable the addon (*Preferences > Add-ons > Install* → `addon/forge_addon.py`) — **deferred**: `forge_addon.py` is still a stub with an empty `register()`, so it won't show a panel until Step 2 adds the socket server + handlers. (The vendored `_upstream/blender-mcp/addon.py` is a working reference to lift from.)
+- [ ] Enable the addon (*Preferences > Add-ons > Install* → `addon/forge_addon.py`) — **now unblocked** (Step 2 built the real addon; registration verified on 5.1.2). This is the one remaining manual GUI action: install + enable, open the **Forge** N-sidebar tab, click **Connect**, then `python scripts/spike_cube.py` should pop a cube in the live window.
 - [x] Added a minimal `server.server:app` `/health` placeholder so the server boots now (replaced by real wiring in Step 5).
 **Verify:** ✅ `uvicorn server.server:app` starts (HTTP 200 on `/health`); ✅ `GOOGLE_API_KEY` loads; ⏳ Blender addon panel — pending Step 2.
 
@@ -358,10 +358,11 @@ print(c.send_command("execute_code", {"code": "import bpy; bpy.ops.mesh.primitiv
 ```
 **Verify:** a cube appears in the running Blender window; the call returns `{"executed": true, ...}`.
 
-#### [ ] Step 2 — `pick_object_at` raycast (Spike S2)
+#### [x] Step 2 — `pick_object_at` raycast (Spike S2) ✅ DONE
 **Goal:** map a 2D viewport pixel to the 3D object under it.
-**Files:** `addon/forge_addon.py` (add handlers + register in the `handlers` dict).
-**Do:** add `_get_view3d()` (find the `VIEW_3D` area/region/`RegionView3D`), `get_view_geometry()` (return region rect + size), and `pick_object_at()` (the §3c snippet). Register both command names.
+**Files:** `addon/forge_addon.py` (full addon), `scripts/_check_addon.py`, `tests/test_addon_headless.py`.
+**Done:** built the real `forge_addon.py` — lifted BlenderMCP's socket server + `bpy.app.timers` main-thread dispatch, stripped all generation/telemetry, renamed UI to the **Forge** panel (`Connect`/`Disconnect`). Handlers: `execute_code`, `get_scene_info`, `get_object_info`, `_get_view3d`, `get_view_geometry`, `pick_object_at` (raycast). Verified on **Blender 5.1.2** headlessly (`pytest tests/test_addon_headless.py`, 15/15 checks): register/unregister clean, **pick at viewport center hits `Cube`** with `world_bounding_box [[-1,-1,-1],[1,1,1]]`, empty pixel → `{"hit": false}`. The `ray_cast(depsgraph,…)` + `view3d_utils` 5.x signatures all work. *Not yet verified:* the GUI socket+timer round-trip (`bpy.app.timers` only fire under the GUI event loop) — that's the manual `spike_cube.py` path below, which also satisfies the 0b "addon panel" item.
+**Do (original):** add `_get_view3d()` (find the `VIEW_3D` area/region/`RegionView3D`), `get_view_geometry()` (return region rect + size), and `pick_object_at()` (the §3c snippet). Register both command names.
 ```python
 def _get_view3d(self):
     for area in bpy.context.screen.areas:
