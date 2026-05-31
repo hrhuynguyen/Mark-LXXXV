@@ -61,7 +61,17 @@ Three processes, all of which already exist in some form across the two referenc
 ### Key topology insight — the client is the bridge to Blender
 Because Blender is **local** (behind the user's NAT), the cloud agent cannot reach it directly. So we reuse Wand's pattern exactly: **the cloud `blender_agent`'s remote tools forward a `tool_call` over the WebSocket to the local client; the client translates each into a JSON command on `localhost:9876`** (BlenderMCP's socket protocol). Blender replaces the Playwright browser as "the local resource the client owns."
 
-This means we **reuse BlenderMCP's addon + wire protocol directly from Wand's client** and **drop BlenderMCP's FastMCP server layer** (`src/blender_mcp/server.py`) — its `BlenderConnection.send_command` / `receive_full_response` logic is lifted into the client's executor. (The standalone MCP server can still be kept for text-only/testing.)
+This means the Gemini Live app **reuses BlenderMCP's addon + wire protocol directly from Wand's client**: `BlenderConnection.send_command` / `receive_full_response` is lifted into the client's executor. We also keep a **standalone MCP bridge** (`server/mcp_blender_bridge.py`, `forge-mcp`) that follows BlenderMCP's `FastMCP tool → BlenderConnection → JSON/TCP → addon handler` pattern for MCP clients and text-only bridge testing.
+
+Optional MCP path for external MCP clients / direct bridge testing:
+
+```text
+MCP client (Claude/Cursor/etc.)
+  → server/mcp_blender_bridge.py (`forge-mcp`, FastMCP)
+  → client.blender_bridge.BlenderConnection
+  → localhost:9876 Forge addon
+  → bpy on Blender main thread
+```
 
 ### No browser — what's dropped vs kept
 The web browser is removed entirely. **Dropped:** `browser_agent`, Playwright/Chromium, the CDP screencast, and all DOM actions (`navigate`, page `click`/`scroll`). **Kept** (none of it is browser-specific — it's general spatial/vision/voice infra): MediaPipe tracking, the homography cursor mapper + calibration, the transparent overlay, mic/speaker audio I/O + barge-in, Gemini Live + ADK orchestration, the audio gate, auto-reconnect, and the remote-tool bridge.
@@ -221,6 +231,7 @@ Wand's tracker uses only landmark 8 (index tip). Extend it to the full 21-landma
 ### Reuse from BlenderMCP (`blender-mcp.md`)
 - `addon.py`: socket server, `bpy.app.timers.register` main-thread dispatch, `execute_code`, `get_scene_info`, `get_object_info`, `_get_aabb`, `get_viewport_screenshot`, Hyper3D/Hunyuan/Sketchfab/Poly Haven handlers, UI panel.
 - `BlenderConnection.send_command` / `receive_full_response` socket logic (lifted into the client).
+- `src/blender_mcp/server.py` pattern for standalone MCP tools: `FastMCP` server, persistent Blender connection, thin tool stubs, screenshot-as-image, and an `asset_creation_strategy` prompt. Forge adapts this in `server/mcp_blender_bridge.py` and reuses the same socket bridge instead of duplicating Blender logic.
 
 ### Build new
 1. **Client→Blender socket bridge** inside `local_executor` (localhost:9876).
@@ -347,8 +358,8 @@ forge/
 
 #### [x] Step 1 — Client → Blender socket round-trip (Spike S1) ✅ DONE
 **Goal:** the client can drive the live Blender scene.
-**Files:** `client/blender_bridge.py` (done), `tests/test_blender_bridge.py` (mock-server unit tests), `scripts/{spike_cube.py, run_spike_headless.py, _spike_blender_server.py}`.
-**Done:** lifted `BlenderConnection` into `client/blender_bridge.py` (typed `BlenderError`, context manager, env-driven host/port, 180 s timeout, no-framing receive-until-valid-JSON per CONTRACTS §3). Verified two ways: (a) `pytest` against a mock server incl. a fragmented reply (4 passed); (b) **real-`bpy` round-trip** via `run_spike_headless.py` → launches headless Blender 5.1.2, the bridge sends `execute_code`, a cube is created (`added: 1`), returns `{"executed": true, ...}`. The in-GUI cube (`scripts/spike_cube.py` + "Connect" panel) lands with the persistent addon in Step 2.
+**Files:** `client/blender_bridge.py` (done), `server/mcp_blender_bridge.py` (optional MCP bridge), `tests/{test_blender_bridge.py,test_mcp_blender_bridge.py}` (mock-server/unit tests), `scripts/{spike_cube.py, run_spike_headless.py, _spike_blender_server.py}`.
+**Done:** lifted `BlenderConnection` into `client/blender_bridge.py` (typed `BlenderError`, context manager, env-driven host/port, 180 s timeout, no-framing receive-until-valid-JSON per CONTRACTS §3). Added `server/mcp_blender_bridge.py` as the BlenderMCP-style standalone `FastMCP` bridge (`forge-mcp`) with persistent connection, thin tools (`get_scene_info`, `get_object_info`, `execute_blender_code`, `pick_object_at`, `get_view_geometry`, `frame_object`, `get_viewport_screenshot`), and a procedural-first `asset_creation_strategy` prompt. Verified two ways: (a) `pytest` against a mock server incl. a fragmented reply plus MCP bridge helper tests; (b) **real-`bpy` round-trip** via `run_spike_headless.py` → launches headless Blender 5.1.2, the bridge sends `execute_code`, a cube is created (`added: 1`), returns `{"executed": true, ...}`. The in-GUI cube (`scripts/spike_cube.py` + "Connect" panel) lands with the persistent addon in Step 2.
 **Do:** lift BlenderMCP's `BlenderConnection.send_command` / `receive_full_response` into `blender_bridge.py`. Click "Connect" in Blender's panel (starts the socket server on 9876). Run a script that sends one command:
 ```python
 # scripts/spike_cube.py
