@@ -26,6 +26,7 @@ Tested on Blender 5.1.2 (bundled Python 3.13). ``bl_info["blender"]`` is the
 
 import io
 import json
+import math
 import socket
 import threading
 import time
@@ -293,21 +294,41 @@ class ForgeServer:
             "pixel_size": float(bpy.context.preferences.system.pixel_size),
         }
 
-    def pick_object_at(self, region_x, region_y):
+    def pick_object_at(self, region_x, region_y, radius=80.0):
         """Raycast from a region pixel into the scene; return the hit object.
 
         ``region_x/region_y`` are pixels within the VIEW_3D WINDOW region with a
         bottom-left origin. The client injects the calibrated cursor here
         (CONTRACTS.md §4.1) — the server never receives screen coordinates.
+
+        ``radius`` (region px) fattens the finger: the pixel under the cursor is
+        tried first, then two rings of samples out to ``radius``, returning the
+        nearest hit. This makes hand-cursor pointing forgiving of small jitter
+        (validated in Spike S3). Pass radius=0 for an exact single-pixel pick.
         """
         _area, region, rv3d = self._get_view3d()
-        coord = (float(region_x), float(region_y))
-        origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, coord)
-        direction = view3d_utils.region_2d_to_vector_3d(region, rv3d, coord)
         depsgraph = bpy.context.evaluated_depsgraph_get()
-        hit, location, normal, _index, obj, _matrix = bpy.context.scene.ray_cast(
-            depsgraph, origin, direction
-        )
+
+        offsets = [(0.0, 0.0)]
+        radius = float(radius)
+        if radius > 0.0:
+            for ring in (radius * 0.5, radius):
+                for k in range(8):
+                    ang = k * math.pi / 4.0
+                    offsets.append((ring * math.cos(ang), ring * math.sin(ang)))
+
+        hit = False
+        location = normal = obj = None
+        for dx, dy in offsets:
+            coord = (float(region_x) + dx, float(region_y) + dy)
+            origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, coord)
+            direction = view3d_utils.region_2d_to_vector_3d(region, rv3d, coord)
+            hit, location, normal, _index, obj, _matrix = bpy.context.scene.ray_cast(
+                depsgraph, origin, direction
+            )
+            if hit and obj is not None:
+                break
+
         if not hit or obj is None:
             return {"hit": False}
         result = {
