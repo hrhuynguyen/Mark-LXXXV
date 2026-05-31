@@ -426,14 +426,18 @@ class PartRegistry:
 
 **Verify:** Step 7 build executor should call `register_tool_result(...)` after each generated object; then `registry.scene_name_report(...)` should show no registered objects missing from Blender.
 
-#### [ ] Step 7 — Spec Agent + Build-Spec executor
+#### [x] Step 7 — Spec Agent + Build-Spec executor ✅ DONE
 **Goal:** terse prompt → detailed, decomposed assembly.
 **Files:** `server/agents/spec_agent.py` (new), `server/agents/blender_agent.py` (executor + generator library).
 **Do:**
 - `spec_agent` = `gemini-2.5-flash`/`pro`, `AgentTool`, returns the **Build Spec** JSON (§5a). Instruction: target ~8–15 parts (medium LOD), ground in `search_agent` when the object is real, emit names/generators/params/placement/parent/materials.
 - In `blender_agent`, write a small **generator library** (`build_cylinder`, `build_engine_cluster`, `build_grid_fin`, `build_landing_leg`, …) and an **executor** that walks `spec.parts`, calls the matching generator, places via AABB, parents under a Collection, and registers each part.
 - Concierge: on a build intent → call `spec_agent` → speak one-sentence summary → run executor immediately (no blocking questions).
-**Verify:** "Build a Falcon 9" → one spoken summary, then named `stage1_body / octaweb / grid_fin_* / landing_leg_* / interstage / stage2_body / fairing` (~8–15 parts) appear, correctly stacked (no clipping), all in the registry.
+**Done:** added `spec_agent` as a text-model Build-Spec producer with `search_agent` grounding, wired it as an `AgentTool` into both concierge and `blender_agent`, and added deterministic `build_from_spec` / `build_named_part` executor tools. The executor validates specs, expands counted editable parts (`grid_fin_1..4`, `landing_leg_1..4`), emits procedural Blender generator code (`cylinder`, `cone`, `cube`, `engine_cluster`, `grid_fin`, `landing_leg`), parents objects under a build collection/root, queries `get_object_info`, and registers every part in the Step-6 registry.
+
+**Auto-verified (37 tests):** Falcon 9-style spec expands to 13 named objects, generated code carries safe JSON config, unsupported generators are rejected, fake executor run registers every produced object, server/agent graph imports, full pytest suite, and `ruff check` all pass.
+
+**Verify:** ⏳ live mic/camera/Gemini/Blender GUI smoke remains manual: say "Build a Falcon 9" → one spoken summary, then named `stage1_body / octaweb / grid_fin_* / landing_leg_* / interstage / stage2_body / fairing` appear, correctly stacked, all in the registry.
 
 ---
 

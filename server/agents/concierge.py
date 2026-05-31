@@ -9,6 +9,7 @@ from google.adk.tools.agent_tool import AgentTool
 
 from server.agents.blender_agent import blender_agent
 from server.agents.search_agent import search_agent
+from server.agents.spec_agent import spec_agent
 from server.callbacks.echo_dedupe import echo_dedupe_before_tool_callback
 from server.callbacks.handoff_guard import transfer_audio_gate_before_tool_callback
 
@@ -26,6 +27,10 @@ root_agent = Agent(
         "- Any Blender, 3D modeling, scene creation, object inspection, or viewport task.\n"
         "- Anything the user points at: 'here', 'this', 'right there', 'what is this?'.\n"
         "- Simple build requests like 'add a cube', 'make a rocket', or 'frame this object'.\n\n"
+        "FOR BUILD INTENTS:\n"
+        "- If you stay in control, call spec_agent to get the Build Spec JSON, speak its summary, "
+        "then transfer to blender_agent with the full spec so it can call build_from_spec.\n"
+        "- Do not ask clarification first; build now at medium LOD unless the user specified detail.\n\n"
         "USE search_agent for standalone factual questions, especially current facts or reference dimensions.\n\n"
         "HANDLE YOURSELF:\n"
         "- Greetings, brief conversation, and non-technical acknowledgements.\n\n"
@@ -35,6 +40,9 @@ root_agent = Agent(
         echo_dedupe_before_tool_callback,
         transfer_audio_gate_before_tool_callback,
     ],
-    tools=[AgentTool(agent=search_agent, skip_summarization=True)],
+    tools=[
+        AgentTool(agent=search_agent, skip_summarization=True),
+        AgentTool(agent=spec_agent, skip_summarization=True),
+    ],
     sub_agents=[blender_agent],
 )
