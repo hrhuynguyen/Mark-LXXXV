@@ -1,0 +1,66 @@
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtual envs / uv ──────────────────────────────────
+.venv/
+venv/
+env/
+uv.lock
+
+# ── Secrets & credentials ──────────────────────────────
+.env
+.env.*
+!.env.example
+*-service-account*.json
+firebase-credentials*.json
+google-credentials*.json
+*.pem
+
+# ── Forge runtime artifacts ────────────────────────────
+# Local saved builds (.blend + registry JSON) and exports
+builds/
+*.blend1
+*.blend2
+*.blend@
+exports/
+# On-demand viewport screenshots / temp captures
+*.tmp.png
+blender_screenshot_*.png
+# Hand calibration / user id caches
+.forge/
+user_id
+
+# ── Logs ───────────────────────────────────────────────
+*.log
+logs/
+
+# ── macOS ──────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# ── Editors / IDEs ─────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Large/model assets (keep small bundled models tracked) ─
+# MediaPipe hand_landmarker.task is small and intentionally committed.
+downloads/
+*.fbx
+*.glb
+*.gltf
+*.hdr
+*.exr
