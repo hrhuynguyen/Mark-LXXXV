@@ -16,6 +16,10 @@ venv/
 env/
 uv.lock
 
+# ── Vendored upstream source (reference only; lifted per plan step) ─
+# Cloned by Step 0b for copying code from; not part of Forge's tree.
+_upstream/
+
 # ── Secrets & credentials ──────────────────────────────
 .env
 .env.*

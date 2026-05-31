@@ -331,13 +331,15 @@ forge/
 - [x] Design docs: `reference.md`, `blender-mcp.md`, `plan.md`
 - [x] `CONTRACTS.md` (socket + tool schemas) — frozen at `PROTOCOL_VERSION 0.1.0`
 
-### [ ] Step 0b — Install & configure
+### [~] Step 0b — Install & configure  *(env done; addon-enable deferred to Step 2)*
 **Goal:** both halves run and can talk to Google.
-- [ ] Copy real upstream code into the stubs: BlenderMCP `addon.py` → `addon/forge_addon.py`; Wand `app/` → `server/`, `client/` → `client/`
-- [ ] `uv venv && source .venv/bin/activate`; `uv pip install -e ".[dev]"`
-- [ ] Set `GOOGLE_API_KEY` in `.env` (Gemini Live)
-- [ ] Install Blender 3.0+; install `forge_addon.py` (*Preferences > Add-ons > Install*); enable it
-**Verify:** `uvicorn server.server:app --port 8000` starts; Blender shows the addon panel in the N-sidebar; `GOOGLE_API_KEY` loads.
+- [x] Vendor real upstream source → `_upstream/{blender-mcp,wand}` (git-ignored reference; lifted into the stubs **per step** rather than wholesale-copied, since our layout renames browser→blender). Copied MediaPipe `hand_landmarker.task` → `client/models/`.
+- [x] `uv venv && source .venv/bin/activate`; `uv pip install -e ".[dev]"` — all deps import (incl. `pyobjc`, `mediapipe`, `cv2`, `sounddevice`; dev `ruff`/`pytest`).
+- [x] `GOOGLE_API_KEY` present in `.env` and loads via `dotenv`; `.env` is git-ignored + untracked.
+- [x] Blender **5.1.2** (bundled Python 3.13) installed at `/Applications/Blender.app`; verified headless — `bpy` runs and `primitive_cube_add` works. ⚠️ 5.x is newer than BlenderMCP's addon target — bump `bl_info["blender"]` and sanity-check `scene.ray_cast` / `view3d_utils` signatures when lifting in Step 2.
+- [ ] Enable the addon (*Preferences > Add-ons > Install* → `addon/forge_addon.py`) — **deferred**: `forge_addon.py` is still a stub with an empty `register()`, so it won't show a panel until Step 2 adds the socket server + handlers. (The vendored `_upstream/blender-mcp/addon.py` is a working reference to lift from.)
+- [x] Added a minimal `server.server:app` `/health` placeholder so the server boots now (replaced by real wiring in Step 5).
+**Verify:** ✅ `uvicorn server.server:app` starts (HTTP 200 on `/health`); ✅ `GOOGLE_API_KEY` loads; ⏳ Blender addon panel — pending Step 2.
 
 ---
 
