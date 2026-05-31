@@ -45,11 +45,11 @@ def test_forwards_tool_call_to_bridge():
     ex = LocalToolExecutor(bridge, sender)
     handled = _run(
         ex.handle_message(
-            {"type": "tool_call", "call_id": "c1", "tool": "pick_object_at", "args": {"region_x": 1}}
+            {"type": "tool_call", "call_id": "c1", "tool": "get_object_info", "args": {"name": "Cube"}}
         )
     )
     assert handled is True
-    assert bridge.calls == [("pick_object_at", {"region_x": 1})]
+    assert bridge.calls == [("get_object_info", {"name": "Cube"})]
     kind, payload = sender.sent[-1]
     assert kind == "tool_result"
     assert payload == {
@@ -100,3 +100,38 @@ def test_non_dict_result_is_wrapped():
     ex = LocalToolExecutor(bridge, sender)
     _run(ex.handle_message({"type": "tool_call", "call_id": "w1", "tool": "tts", "args": {}}))
     assert sender.sent[-1][1]["result"] == {"result": "plain string"}
+
+
+def test_execute_blender_code_maps_to_addon_execute_code():
+    bridge = FakeBridge(result={"executed": True})
+    sender = FakeSender()
+    ex = LocalToolExecutor(bridge, sender)
+    _run(
+        ex.handle_message(
+            {
+                "type": "tool_call",
+                "call_id": "code1",
+                "tool": "execute_blender_code",
+                "args": {"code": "print('x')"},
+            }
+        )
+    )
+    assert bridge.calls == [("execute_code", {"code": "print('x')"})]
+
+
+def test_pick_object_at_injects_current_region_point():
+    bridge = FakeBridge(result={"hit": True, "name": "Cube"})
+    sender = FakeSender()
+    ex = LocalToolExecutor(bridge, sender, region_point_provider=lambda: (12.4, 56.6))
+    _run(ex.handle_message({"type": "tool_call", "call_id": "p1", "tool": "pick_object_at", "args": {}}))
+    assert bridge.calls == [("pick_object_at", {"region_x": 12, "region_y": 57})]
+
+
+def test_pick_object_at_without_calibrated_cursor_errors():
+    bridge = FakeBridge()
+    sender = FakeSender()
+    ex = LocalToolExecutor(bridge, sender, region_point_provider=lambda: None)
+    _run(ex.handle_message({"type": "tool_call", "call_id": "p2", "tool": "pick_object_at", "args": {}}))
+    assert bridge.calls == []
+    assert sender.sent[-1][1]["ok"] is False
+    assert "no calibrated cursor" in sender.sent[-1][1]["error"]

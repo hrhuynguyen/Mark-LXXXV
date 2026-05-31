@@ -398,11 +398,13 @@ def get_view_geometry(self):
 **Auto-verified (23 tests):** executor forwards/dedups/error-wraps; launcher attach-vs-spawn + missing-binary; client + server import clean; zero browser refs in `client/`.
 **Pending (needs you):** Terminal A `uv run uvicorn server.server:app`; Terminal B `uv run python -m client.companion_app` → Blender opens & connects with no clicks, sidebar shows the live log + webcam preview, the overlay dot tracks your hand, and the server logs a growing `mic=/cursor=` tally. No browser anywhere.
 
-#### [ ] Step 5 — `blender_agent` + remote tool bridge
+#### [x] Step 5 — `blender_agent` + remote tool bridge ✅ DONE
 **Goal:** the cloud/Local ADK agent executes Blender tools via the client.
 **Files:** `server/agents/blender_agent.py`, `server/tools/remote_blender.py`, `server/agents/concierge.py`, `client/local_executor.py`.
+**Done:** replaced the Step-4 WebSocket sink with the real Gemini Live/ADK server; wired `concierge` → `blender_agent` and `search_agent`; implemented the server `SessionBridge` (`tool_call`/`tool_result` RPC), remote Blender tools (`execute_blender_code`, `pick_object_at`, `get_object_info`, `get_viewport_screenshot`, `frame_object`), audio gate / resettable queue / trace / cursor infra, and the client-side Seam-1→Seam-2 adaptations (`execute_blender_code`→`execute_code`, cursor injection for `pick_object_at`, temp filepath for screenshots). Added addon handlers for `get_viewport_screenshot` and `frame_object`.
+**Auto-verified (28 tests):** server imports + health, agent wiring, session bridge round-trip, local executor tool mapping/cursor injection/errors, existing Blender bridge/addon/cursor/launcher tests. `ruff check` passes.
 **Do:** rename `browser_agent` → `blender_agent`; replace its tools with `execute_blender_code`, `pick_object_at`, `get_object_info`, `get_viewport_screenshot`, `frame_object`. Each is a thin RPC stub (reuse Wand's `_call`) that the client maps to a `blender_bridge.send_command`. Update the concierge instruction to delegate modeling/pointing to `blender_agent`.
-**Verify:** say "add a cube" → it appears; "what's at my finger?" → screenshot + `pick_object_at` returns the right name and the agent describes it.
+**Verify:** ⏳ live mic/camera/Gemini/Blender GUI smoke remains manual: say "add a cube" → it appears; "what's at my finger?" → screenshot + `pick_object_at` returns the right name and the agent describes it.
 
 #### [ ] Step 6 — Part Registry
 **Goal:** every created object is a tracked, JSON-serializable part.

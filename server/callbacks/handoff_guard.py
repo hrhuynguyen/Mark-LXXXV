@@ -1,6 +1,124 @@
-"""server.callbacks.handoff_guard
+"""before_tool_callback that gates microphone upload across agent transfers."""
 
-before_tool_callback gating audio across transfer_to_agent (reused from Wand). Step 5 infra.
-"""
+from __future__ import annotations
 
-# Scaffold stub — implement per plan.md. Not yet wired up.
+import asyncio
+import logging
+import os
+from typing import Any, Optional
+
+from server.live.audio_gate import get_audio_gate
+from server.live.trace import make_audio_gate_message
+from server.runtime.session_bridge import get_bridge
+
+
+TRANSFER_AUDIO_GATE_REOPEN_DELAY_S = float(
+    os.getenv("TRANSFER_AUDIO_GATE_REOPEN_DELAY_S", "1.25")
+)
+logger = logging.getLogger("forge.server.callbacks.handoff_guard")
+
+
+async def reopen_transfer_audio_gate(*, user_id: str, session_id: str, reason: str) -> bool:
+    gate = get_audio_gate(user_id, session_id)
+    if gate is None:
+        return False
+
+    async with gate.lock:
+        current_task = asyncio.current_task()
+        if gate.reopen_task is current_task:
+            gate.reopen_task = None
+        gate.allow_audio_upload = True
+        gate.handoff_pending = False
+        gate.target_agent = None
+
+    bridge = await get_bridge(user_id, session_id)
+    if bridge is not None:
+        await bridge.send_json(
+            make_audio_gate_message(
+                session_id=session_id,
+                state="open",
+                reason=reason,
+            )
+        )
+    logger.info("[transfer.guard] reopened audio gate user=%s session=%s", user_id, session_id)
+    return True
+
+
+async def clear_transfer_audio_gate(*, user_id: str, session_id: str) -> bool:
+    gate = get_audio_gate(user_id, session_id)
+    if gate is None:
+        return False
+
+    async with gate.lock:
+        task = gate.reopen_task
+        gate.reopen_task = None
+        gate.allow_audio_upload = True
+        gate.handoff_pending = False
+        gate.target_agent = None
+
+    if task is not None and not task.done():
+        task.cancel()
+    return True
+
+
+async def transfer_audio_gate_before_tool_callback(
+    tool,
+    args: dict[str, Any],
+    tool_context,
+) -> Optional[dict]:
+    if getattr(tool, "name", "") != "transfer_to_agent":
+        return None
+
+    user_id = str(getattr(tool_context, "user_id", "") or "")
+    session = getattr(tool_context, "session", None)
+    session_id = str(getattr(session, "id", "") or "")
+    if not user_id or not session_id:
+        return None
+
+    gate = get_audio_gate(user_id, session_id)
+    if gate is None:
+        return None
+
+    target_agent = str(args.get("agent_name", "") or "").strip() or None
+    async with gate.lock:
+        task = gate.reopen_task
+        gate.reopen_task = None
+        gate.allow_audio_upload = False
+        gate.handoff_pending = True
+        gate.target_agent = target_agent
+        gate.queue.drop_realtime_backlog()
+        gate.reopen_task = asyncio.create_task(
+            _reopen_after_transfer_delay(user_id=user_id, session_id=session_id)
+        )
+
+    if task is not None and not task.done():
+        task.cancel()
+
+    bridge = await get_bridge(user_id, session_id)
+    if bridge is not None:
+        await bridge.send_json(
+            make_audio_gate_message(
+                session_id=session_id,
+                state="closed",
+                reason="transfer_to_agent",
+            )
+        )
+    logger.info(
+        "[transfer.guard] closed audio gate user=%s session=%s target=%s",
+        user_id,
+        session_id,
+        target_agent,
+    )
+    return None
+
+
+async def _reopen_after_transfer_delay(*, user_id: str, session_id: str) -> None:
+    try:
+        await asyncio.sleep(TRANSFER_AUDIO_GATE_REOPEN_DELAY_S)
+        await reopen_transfer_audio_gate(
+            user_id=user_id,
+            session_id=session_id,
+            reason="transfer_to_agent",
+        )
+    except asyncio.CancelledError:
+        raise

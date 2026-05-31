@@ -1,6 +1,5 @@
-"""server.agents.spec_agent
+"""Placeholder for Step 7 Build Spec generation.
 
-Terse prompt -> structured Build Spec (text model gemini-2.5-flash/pro, AgentTool). Step 7. See plan.md 5a.
+Step 5 wires the live agent bridge. The spec agent is intentionally not active
+until the Part Registry and Build-Spec executor land in Steps 6-7.
 """
-
-# Scaffold stub — implement per plan.md. Not yet wired up.

@@ -15,6 +15,8 @@ The bridge socket call is synchronous; it is offloaded to a thread via
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
 from collections import deque
 from typing import Any, Callable, Deque, Optional, Set
 
@@ -29,10 +31,12 @@ class LocalToolExecutor:
         sender: WSSender,
         *,
         event_callback: Optional[Callable[[dict[str, Any]], None]] = None,
+        region_point_provider: Optional[Callable[[], tuple[float, float] | None]] = None,
     ) -> None:
         self.bridge = bridge
         self.sender = sender
         self.event_callback = event_callback
+        self.region_point_provider = region_point_provider
         self._recent_ids: Deque[str] = deque(maxlen=256)
         self._recent_id_set: Set[str] = set()
 
@@ -66,7 +70,7 @@ class LocalToolExecutor:
                     "request_id": call_id,
                 }
             )
-            result = await self._dispatch(tool, args)
+            result = await self._dispatch(tool, args, call_id=call_id)
         except Exception as exc:
             await self._send_error(call_id, str(exc))
             self._emit(
@@ -101,19 +105,52 @@ class LocalToolExecutor:
         self._remember_call_id(call_id)
         return True
 
-    async def _dispatch(self, tool: str, args: dict[str, Any]) -> dict:
+    async def _dispatch(self, tool: str, args: dict[str, Any], *, call_id: str = "") -> dict:
         """Relay the tool call to the Blender bridge on a worker thread.
 
         The bridge returns the addon's ``result`` dict (or raises BlenderError).
         Non-dict results are wrapped so the ``tool_result`` payload stays a JSON
         object.
         """
+        command, params = self._prepare_blender_command(tool, args, call_id=call_id)
         loop = asyncio.get_running_loop()
         try:
-            result = await loop.run_in_executor(None, self.bridge.send_command, tool, args)
+            result = await loop.run_in_executor(None, self.bridge.send_command, command, params)
         except BlenderError as exc:
             raise RuntimeError(f"Blender error: {exc}") from exc
         return result if isinstance(result, dict) else {"result": result}
+
+    def _prepare_blender_command(
+        self,
+        tool: str,
+        args: dict[str, Any],
+        *,
+        call_id: str,
+    ) -> tuple[str, dict[str, Any]]:
+        """Apply the small Seam-1 -> Seam-2 adaptations from CONTRACTS.md §4."""
+        command = "execute_code" if tool == "execute_blender_code" else tool
+        params = dict(args)
+
+        if tool == "pick_object_at" and (
+            "region_x" not in params or "region_y" not in params
+        ):
+            if self.region_point_provider is None:
+                raise RuntimeError("no calibrated cursor")
+            point = self.region_point_provider()
+            if point is None:
+                raise RuntimeError("no calibrated cursor")
+            params["region_x"] = int(round(point[0]))
+            params["region_y"] = int(round(point[1]))
+
+        if tool == "get_viewport_screenshot" and not params.get("filepath"):
+            safe_call_id = "".join(ch for ch in call_id if ch.isalnum() or ch in "-_") or "shot"
+            params["filepath"] = os.path.join(
+                tempfile.gettempdir(),
+                f"forge_viewport_{safe_call_id}.png",
+            )
+            params.setdefault("format", "png")
+
+        return command, params
 
     async def _send_error(self, call_id: str, message: str) -> None:
         await self.sender.send_json(

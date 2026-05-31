@@ -176,6 +176,8 @@ class ForgeServer:
             "get_view_geometry": self.get_view_geometry,
             "get_window_geometry": self.get_window_geometry,
             "pick_object_at": self.pick_object_at,
+            "get_viewport_screenshot": self.get_viewport_screenshot,
+            "frame_object": self.frame_object,
         }
         handler = handlers.get(cmd_type)
         if not handler:
@@ -342,6 +344,55 @@ class ForgeServer:
         if obj.type == "MESH":
             result["world_bounding_box"] = self._get_aabb(obj)
         return result
+
+    def get_viewport_screenshot(self, max_size=800, filepath=None, format="png"):
+        """Capture the active 3D viewport to a file path on the local machine."""
+        if not filepath:
+            raise ValueError("filepath is required")
+        area, _region, _rv3d = self._get_view3d()
+        with bpy.context.temp_override(area=area):
+            bpy.ops.screen.screenshot_area(filepath=filepath)
+
+        img = bpy.data.images.load(filepath)
+        try:
+            width, height = img.size
+            max_size = int(max_size)
+            if max(width, height) > max_size > 0:
+                scale = max_size / max(width, height)
+                width = max(1, int(width * scale))
+                height = max(1, int(height * scale))
+                img.scale(width, height)
+                img.file_format = str(format).upper()
+                img.save()
+            return {
+                "success": True,
+                "width": int(width),
+                "height": int(height),
+                "filepath": filepath,
+            }
+        finally:
+            bpy.data.images.remove(img)
+
+    def frame_object(self, name):
+        """Frame a named object in the first VIEW_3D viewport."""
+        obj = bpy.data.objects.get(name)
+        if not obj:
+            raise ValueError(f"Object not found: {name}")
+        area, region, rv3d = self._get_view3d()
+        for candidate in bpy.context.scene.objects:
+            candidate.select_set(False)
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        with bpy.context.temp_override(
+            area=area,
+            region=region,
+            space_data=area.spaces.active,
+            region_data=rv3d,
+            selected_objects=[obj],
+            active_object=obj,
+        ):
+            bpy.ops.view3d.view_selected(use_all_regions=False)
+        return {"ok": True}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

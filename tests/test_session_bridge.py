@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from server.runtime.session_bridge import (
+    SessionBridgeError,
+    call_local_tool,
+    handle_tool_result,
+    register_bridge,
+    unregister_bridge,
+)
+
+
+class FakeWebSocket:
+    def __init__(self) -> None:
+        self.text_frames: list[dict] = []
+        self.binary_frames: list[bytes] = []
+
+    async def send_text(self, payload: str) -> None:
+        self.text_frames.append(json.loads(payload))
+
+    async def send_bytes(self, payload: bytes) -> None:
+        self.binary_frames.append(payload)
+
+
+def test_call_local_tool_round_trip() -> None:
+    async def scenario() -> None:
+        ws = FakeWebSocket()
+        bridge = await register_bridge("user", "session", ws)
+        try:
+            task = asyncio.create_task(
+                call_local_tool(
+                    user_id="user",
+                    session_id="session",
+                    tool="pick_object_at",
+                    args={},
+                    timeout_s=0.5,
+                )
+            )
+            await asyncio.sleep(0)
+
+            assert len(ws.text_frames) == 2
+            assert ws.text_frames[0]["type"] == "trace_event"
+            assert ws.text_frames[0]["event"] == "tool_called"
+            sent = ws.text_frames[1]
+            assert sent["type"] == "tool_call"
+            assert sent["tool"] == "pick_object_at"
+            assert sent["args"] == {}
+
+            handled = await handle_tool_result(
+                "user",
+                "session",
+                {
+                    "type": "tool_result",
+                    "call_id": sent["call_id"],
+                    "ok": True,
+                    "result": {"hit": True, "name": "Cube"},
+                },
+            )
+            assert handled is True
+
+            result = await task
+            assert result == {"hit": True, "name": "Cube"}
+            assert ws.text_frames[2]["type"] == "trace_event"
+            assert ws.text_frames[2]["event"] == "tool_finished"
+            assert ws.text_frames[2]["status"] == "ok"
+        finally:
+            await unregister_bridge("user", "session", bridge)
+
+    asyncio.run(scenario())
+
+
+def test_call_local_tool_without_bridge_errors() -> None:
+    async def scenario() -> None:
+        with pytest.raises(SessionBridgeError):
+            await call_local_tool("missing", "missing", "pick_object_at", {}, timeout_s=0.1)
+
+    asyncio.run(scenario())
